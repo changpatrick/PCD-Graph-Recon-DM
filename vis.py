@@ -17,15 +17,16 @@ with open(f"results/{dataset}-pcd/edge.txt") as f:
         nums = line.strip().split()
         if len(nums) >= 3:
             u, v, marker = int(nums[0]), int(nums[1]), int(nums[2])
-            edges.append([u, v])
+            if marker == 2:
+                edges.append([u, v])
 
 edges = np.array(edges, dtype=np.int32)
 print(f"len(edges) = {len(edges)}")
 
 # Create Open3D objects
 pcd = o3d.geometry.PointCloud()
-pcd.points = o3d.utility.Vector3dVector(points)
-pcd.paint_uniform_color([0.1, 0.7, 0.9])
+# pcd.points = o3d.utility.Vector3dVector(points)
+# pcd.paint_uniform_color([0.1, 0.7, 0.9])
 
 line_set = o3d.geometry.LineSet()
 line_set.points = o3d.utility.Vector3dVector(points)
