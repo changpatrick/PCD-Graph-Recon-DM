@@ -90,5 +90,21 @@ line_set.points = o3d.utility.Vector3dVector(points)
 line_set.lines = o3d.utility.Vector2iVector(edges)
 line_set.paint_uniform_color([0, 0, 0])
 
+# --- Save filtered edges ---
+output_path = f"results/{dataset}-pcd/edge_detour_filtered.txt"
+
+# Reattach marker type for clarity: base edges get original markers, good2 get marker 2
+base_mask = np.isin(E[:, 2], (-1, 1))
+base_edges = E[base_mask, :]
+good2_full = np.hstack([good2, 2 * np.ones((good2.shape[0], 1), dtype=int)])
+
+final_edges_full = np.vstack([base_edges, good2_full])
+
+# Save to file
+np.savetxt(output_path, final_edges_full, fmt="%d")
+
+print(f"Saved filtered edges to {output_path}")
+
+
 # Visualize
 o3d.visualization.draw_geometries([pcd, line_set])
