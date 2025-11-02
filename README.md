@@ -1,4 +1,10 @@
-# Point Cloud Discrete Morse Graph Reconstruction
+# PCD Discrete Morse Graph Reconstruction + Sparse Weighted Rips (copy)
+
+### Updated Notes:
+sparse-weighted-rips.py: runs discrete morse graph reconstruction with sparse weighted rips on features.txt, a commented out code chunk includes how to create features.txt from pcd
+DetourFilter.py: runs detour filtering on the result from sparse-weighted-rips.py
+vis.py: visualizes points, unfiltered lines, and detour filtered lines from 
+
 
 dmpcd is a python package meant for executing the discrete Morse graph reconstruction algorithm on Point Cloud Datasets - designed with full mouse brain imaging data in mind.  The package includes functions which allow the user to perform the baseline DM approach and the more recently developed PCD DM approach.  For the basline approach, the package allows users to compute the Rips filtration, estimate density at each point, compute persistence of lower star filtration, and perform discrete Morse graph reconstruction.  For the PCD DM approach, users can compute the sparse weighted Rips filtration, compute persistence of the filtration, and perform discrete Morse graph reconstruction.  Data can be labeled or unlabeled, with visualization tools included for both cases.
 
@@ -634,5 +640,6 @@ output_dir/dimo_edge.txt - DM graph edges
     >morse_edge_filename = os.path.join(morse_dir, 'dimo_edge.txt')
 
     >dm.visualize_results_2d(input_filename, morse_edge_filename)
+
 
 
