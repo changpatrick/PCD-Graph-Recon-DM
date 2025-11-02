@@ -1,6 +1,7 @@
 import numpy as np
 import open3d as o3d
 import networkx as nx
+from MomentumConnect import MomentumConnect
 
 dataset = "tangle01"
 
@@ -77,6 +78,12 @@ edges = final_edges[:, :2]
 
 badEdges = bad2
 
+addedBack = MomentumConnect(edges, badEdges,points, 1/2, 30)
+
+final_edges = np.vstack([
+    final_edges, addedBack
+])
+
 # edges = np.array(edges, dtype=np.int32)
 # print(f"len(edges) = {len(edges)}")
 
@@ -87,7 +94,7 @@ pcd.paint_uniform_color([0.1, 0.7, 0.9])
 
 line_set = o3d.geometry.LineSet()
 line_set.points = o3d.utility.Vector3dVector(points)
-line_set.lines = o3d.utility.Vector2iVector(edges)
+line_set.lines = o3d.utility.Vector2iVector(final_edges)
 line_set.paint_uniform_color([0, 0, 0])
 
 # Visualize
