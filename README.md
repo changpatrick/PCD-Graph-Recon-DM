@@ -5,6 +5,17 @@ sparse-weighted-rips.py: runs discrete morse graph reconstruction with sparse we
 DetourFilter.py: runs detour filtering on the result from sparse-weighted-rips.py
 vis.py: visualizes points, unfiltered lines, and detour filtered lines from 
 
+### Current Pipeline
+0. Generate pcd (possibly using mixed resolution downsampling)
+1. Upload pcd into data/name_of_web/ (e.g. data/tangle01)
+2. Run sparse-weighted-rips.py after changing the dataset and pcd_name variables 
+to match the name of the web and the pcd file name (no command line args).
+3. python3 UpdatedPipeline.py name_of_web (e.g. python3 UpdatedPipeline.py tangle01)
+
+Step 3 should output a visualization of the web. MomentumConnect.py handles removing some edges to try and reduce "laddering."
+
+
+
 
 dmpcd is a python package meant for executing the discrete Morse graph reconstruction algorithm on Point Cloud Datasets - designed with full mouse brain imaging data in mind.  The package includes functions which allow the user to perform the baseline DM approach and the more recently developed PCD DM approach.  For the basline approach, the package allows users to compute the Rips filtration, estimate density at each point, compute persistence of lower star filtration, and perform discrete Morse graph reconstruction.  For the PCD DM approach, users can compute the sparse weighted Rips filtration, compute persistence of the filtration, and perform discrete Morse graph reconstruction.  Data can be labeled or unlabeled, with visualization tools included for both cases.
 
