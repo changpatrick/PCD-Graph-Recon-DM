@@ -6,19 +6,20 @@ import os
 
 dataset = "tangle01"
 
-"""
+
 # if using pcd, and features.txt doesn't already exist then use below
-pcd_name = "tangle001 255 2025-02-08 18-50-40 T0.35.pcd"
+pcd_name = "cloud_multires.pcd"
 
 # load pcd
 pcd = o3d.io.read_point_cloud(f"data/{dataset}/{pcd_name}")
-voxel_size = 10
-pcd_down = pcd.voxel_down_sample(voxel_size)
-points = np.asarray(pcd_down.points)
+#voxel_size = 10
+#pcd_down = pcd.voxel_down_sample(voxel_size)
+#points = np.asarray(pcd_down.points)
+points = np.asarray(pcd.points)
 
 # save to features.txt
 np.savetxt(f"data/{dataset}/features.txt", points, fmt="%.6f")
-"""
+
 
 feature_filename = f"data/{dataset}/features.txt"
 output_dir = f"results/{dataset}-pcd/"

@@ -7,11 +7,11 @@ import os
 # User settings
 # -----------------------------
 
-dataset = "tangle01"
+dataset = "tangle06"
 path = f"data/{dataset}"
 input_file = glob.glob(os.path.join(path, "*.pcd"))[0]
 num_slices = 5                # Number of equal-height layers
-voxel_sizes = [0.02, 0.05, 0.08, 0.12, 0.15]   # One voxel size per slice
+voxel_sizes = [3, 10, 10, 10, 3]   # One voxel size per slice
 
 assert len(voxel_sizes) == num_slices, "voxel_sizes list must match num_slices"
 
