@@ -14,6 +14,38 @@ to match the name of the web and the pcd file name (no command line args).
 
 Step 3 should output a visualization of the web. MomentumConnect.py handles removing some edges to try and reduce "laddering."
 
+### Unified Pipeline (Recommended)
+0. Generate pcd (possibly using mixed resolution downsampling)
+1. Upload pcd into data/name_of_web/ (e.g. data/tangle01)
+2. Run the unified pipeline script:
+   ```bash
+   python3 run_pipeline.py <dataset_folder> <pcd_file_name> [options]
+   ```
+   Example:
+   ```bash
+   python3 run_pipeline.py tangle01 "tangle001 255 2025-02-08 18-50-40 T0.35.pcd"
+   ```
+
+   **Addressing Laddering:**
+   To reduce "laddering" (parallel edges), tune the following parameters:
+   - `--tau-detour`: Detour filter threshold (default 1.5). Lower values filter more edges.
+   - `--keep-tau`: Momentum connect threshold (default 0.5). Higher values are stricter.
+
+   Example with tuning:
+   ```bash
+   python3 run_pipeline.py tangle01 "tangle001 255 2025-02-08 18-50-40 T0.35.pcd" --tau-detour 1.2 --keep-tau 0.6
+   ```
+
+   **Options:**
+   - `--no-vis`: Disable visualization.
+   - `--voxel-size`: Voxel size for downsampling (default 15).
+   - `--k`: k-nearest neighbors (default 15).
+   - `--metric`: Distance metric (default 'euclidean').
+   - `--epsilon`: Sparsification parameter (default 0.99).
+   - `--persistence-threshold`: Persistence threshold (default 0.99).
+
+   The script outputs the filtered graph to `results/<dataset>-pcd/edge_detour_filtered.txt`.
+
 
 
 
