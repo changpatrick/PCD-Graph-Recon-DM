@@ -1,0 +1,22 @@
+# Python
+__pycache__/
+*.pyc
+
+# macOS
+.DS_Store
+
+# Build artifacts / Binaries
+dmpcd/code/persistence_swr/spt_cpp
+dmpcd/code/phat_morse_src/a.out
+*.o
+
+# Results and Output
+results/
+
+# Generated Data
+features.txt
+*.pcd
+
+# Editor
+.vscode/
+.idea/
