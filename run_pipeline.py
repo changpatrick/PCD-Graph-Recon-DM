@@ -60,6 +60,69 @@ def filter_marker2_by_detour(P, E, tau_detour=1.5, base_markers=(-1, 1)):
 
     return np.array(keep, dtype=int), np.array(delete, dtype=int)
 
+def filter_marker2_by_detour_and_distance(
+    P, E,
+    tau_detour=1.5,
+    base_markers=(-1, 1),
+    far_percentile=75  # percetnile
+):
+    """
+    P: (N,3) float array of points
+    E: (M,3) int array of [u, v, marker]
+
+    Returns:
+      keep:   (K,2) int array of kept marker-2 edges
+      delete: (D,2) int array of deleted marker-2 edges
+    """
+
+    all_lengths = []
+    for u, v, _m in E:
+        u = int(u); v = int(v)
+        Le = float(np.linalg.norm(P[v] - P[u]))
+        if Le > 0:
+            all_lengths.append(Le)
+
+    far_thresh = float(np.percentile(all_lengths, far_percentile)) if all_lengths else float("inf")
+
+
+    G = nx.Graph()
+    G.add_nodes_from(range(len(P)))
+    for u, v, m in E:
+        if m in base_markers:
+            u = int(u); v = int(v)
+            w = float(np.linalg.norm(P[v] - P[u]))
+            if w > 0:
+                G.add_edge(u, v, weight=w)
+
+        E2 = E[E[:, 2] == 2, :2]
+    keep = []
+    delete = []
+
+    for u, v in E2:
+        u = int(u); v = int(v)
+        Le = float(np.linalg.norm(P[v] - P[u]))
+        if Le <= 0:
+            continue
+        if Le > far_thresh:
+            delete.append([u, v])
+            continue
+        try:
+            Lg = float(nx.shortest_path_length(G, u, v, weight="weight"))
+        except nx.NetworkXNoPath:
+            delete.append([u, v])  # treat as "bad"
+            continue
+
+        DR = Lg / Le
+        if DR <= tau_detour:
+            keep.append([u, v])
+        else:
+            delete.append([u, v])
+
+    keep = np.array(keep, dtype=int).reshape(-1, 2)
+    delete = np.array(delete, dtype=int).reshape(-1, 2)
+    return keep, delete
+
+
 def main():
     args = parse_args()
     dataset = args.dataset
@@ -168,7 +231,7 @@ def main():
         E = np.array(edges_list, dtype=int)
     
     # Detour Filter
-    good2, bad2 = filter_marker2_by_detour(points_sorted, E, tau_detour=args.tau_detour)
+    good2, bad2 = filter_marker2_by_detour_and_distance(points_sorted, E, tau_detour=args.tau_detour)
     
     # Build filtered edges
     base_mask = np.isin(E[:, 2], (-1, 1))
