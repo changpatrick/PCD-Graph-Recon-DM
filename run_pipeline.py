@@ -59,39 +59,30 @@ def filter_marker2_by_detour(P, E, tau_detour=1.5, base_markers=(-1, 1)):
             delete.append([u, v])
 
     return np.array(keep, dtype=int), np.array(delete, dtype=int)
-
-def marker2_length_percentile(P, keep, delete, percentile=75):
+def edge_length_percentile_filter(P, edges_full, percentile=75):
     """
-    P    : (N,3) float array of points
-    keep : (K,2) int array of edges (u, v)
-    delete : (K,2) int array of edges (u, v)
+    P          : (N,3) float array of points
+    edges_full : (M,3) int array of [u, v, marker]
+    percentile : keep edges with length <= this percentile
 
-    returns:
-    keep : (K,2) int array of edges (u, v)
-    delete : (K,2) int array of edges (u, v)
-    After moving top 1-percentile % of longest Euclidean edge lengths from keep into delete 
+    Returns:
+      kept_full   : (K,3) kept edges [u, v, marker]
+      removed_full: (R,3) removed edges [u, v, marker]
+      threshold   : float length threshold used
     """
+    edges_full = np.asarray(edges_full, dtype=int).reshape(-1, 3)
+    if edges_full.shape[0] == 0:
+        return edges_full, edges_full[:0], float("inf")
 
-    keep = np.asarray(keep, dtype=int).reshape(-1, 2)
-    delete = np.asarray(delete, dtype=int).reshape(-1, 2)
-
-    # Nothing to do
-    if keep.shape[0] == 0:
-        return keep, delete
-
-    lengths = np.linalg.norm(P[keep[:, 1]] - P[keep[:, 0]], axis=1)
+    uv = edges_full[:, :2]
+    lengths = np.linalg.norm(P[uv[:, 1]] - P[uv[:, 0]], axis=1)
 
     threshold = float(np.percentile(lengths, percentile))
-
     mask = lengths <= threshold
 
-    keep_short = keep[mask]
-    keep_long  = keep[~mask]
-
-    if keep_long.shape[0] > 0:
-        delete = np.vstack([delete, keep_long]) if delete.size else keep_long
-
-    return keep_short, delete
+    kept_full = edges_full[mask]
+    removed_full = edges_full[~mask]
+    return kept_full, removed_full, threshold
 
 
 
@@ -205,9 +196,9 @@ def main():
         E = np.array(edges_list, dtype=int)
     
     # Detour Filter
-    keep, delete = filter_marker2_by_detour(points_sorted, E, tau_detour=args.tau_detour)
+    good2, bad2 = filter_marker2_by_detour(points_sorted, E, tau_detour=args.tau_detour)
 
-    good2, bad2 = marker2_length_percentile( P=points_sorted, keep=keep, delete=delete, percentile=75)
+    
     
     # Build filtered edges
     base_mask = np.isin(E[:, 2], (-1, 1))
@@ -241,6 +232,10 @@ def main():
     added_back_full = np.hstack([added_back, 2 * np.ones((len(added_back), 1), dtype=int)]) if len(added_back) > 0 else np.empty((0, 3), dtype=int)
 
     final_edges_full = np.vstack([base_edges_full, good2_full, added_back_full])
+
+    final_edges_full, removed_edges_full, thr = edge_length_percentile_filter( P=points_sorted, edges_full=final_edges_full, percentile=75 )
+    print(f"Length filter: kept {len(final_edges_full)} edges, removed {len(removed_edges_full)} edges (threshold={thr:.6f})")
+
     np.savetxt(output_path, final_edges_full, fmt="%d")
     print(f"Saved filtered edges to {output_path}")
 
