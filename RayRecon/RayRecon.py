@@ -665,6 +665,70 @@ def remove_isolated_points(P, E_full_or_uv):
     else:
         return P2, uv2
 
+
+
+
+
+
+
+
+
+
+
+def export_pajek_net(filepath, points, edges_full_or_uv, use_markers_as_weights=False):
+    """
+    Writes a Pajek .net file.
+
+    points: (N,3) float array (we export x,y; keep z in a comment)
+    edges_full_or_uv: (M,2) or (M,3) int array; first two cols are (u,v), optional marker/weight.
+
+    Pajek uses 1-based vertex indices.
+    """
+    P = np.asarray(points, dtype=float)
+    E = np.asarray(edges_full_or_uv)
+
+    if E.size == 0:
+        uv = np.empty((0, 2), dtype=int)
+        w = None
+    else:
+        uv = E[:, :2].astype(int)
+        w = E[:, 2].astype(float) if (E.ndim == 2 and E.shape[1] >= 3) else None
+
+    N = P.shape[0]
+
+    with open(filepath, "w", encoding="utf-8") as f:
+        f.write(f"*Vertices {N}\n")
+        # Pajek vertex line: id "label" x y
+        # We'll use id as label; include z as a trailing comment.
+        for i in range(N):
+            x, y, z = P[i]
+            vid = i + 1  # 1-based
+            f.write(f'{vid} "{vid}" {x:.8f} {y:.8f}  % z={z:.8f}\n')
+
+        f.write("*Edges\n")  # undirected edges
+        for k in range(uv.shape[0]):
+            a = int(uv[k, 0]) + 1
+            b = int(uv[k, 1]) + 1
+            if use_markers_as_weights and w is not None:
+                f.write(f"{a} {b} {w[k]:.6f}\n")
+            else:
+                f.write(f"{a} {b}\n")
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 if __name__ == "__main__":
     edges_path = "C:/Users/samue/Downloads/Research/Spider/Current/DisconnectedComp/edge_detour_filtered1.txt"
     points_path = "C:/Users/samue/Downloads/Research/Spider/Current/DisconnectedComp/sorted-feature1.txt"
@@ -731,6 +795,13 @@ if __name__ == "__main__":
     interior_quantile=0.10,  # middle 80%
     x_axis=0,                # X
     y_axis=1                 # Y
+)
+    
+    export_pajek_net(
+    "C:/Users/samue/Downloads/Research/Spider/Current/DisconnectedComp/reconstructed.net",
+    points_final,
+    edges_final,
+    use_markers_as_weights=True  # optional
 )
     
     visualize_degree1_vertices(
