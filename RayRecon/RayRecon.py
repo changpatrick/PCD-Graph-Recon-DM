@@ -513,27 +513,161 @@ def beam_latch_from_degree1(
     return P, uv2
 
 
+def _branch_vertices_from_leaf(u: int, adj, deg):
+    u = int(u)
+    if deg.get(u, 0) != 1:
+        return {u}
+
+    nbrs = adj.get(u, [])
+    if len(nbrs) != 1:
+        return {u}
+
+    branch = {u}
+    prev = u
+    cur = int(nbrs[0])
+    branch.add(cur)
+
+    while deg.get(cur, 0) == 2:
+        nbs = adj.get(cur, [])
+        if len(nbs) != 2:
+            break
+        nxt = int(nbs[0]) if int(nbs[1]) == prev else int(nbs[1])
+        if nxt == prev:
+            break
+        prev, cur = cur, nxt
+        if cur in branch:
+            break
+        branch.add(cur)
+
+    return branch
 
 
 
+def connect_interior_leaves_to_nearest_k_no_same_branch_xy(
+    points,
+    edges_full_or_uv,
+    k=2,
+    interior_quantile=0.10,   # middle 80% => 10%..90%
+    x_axis=0,                 # X column
+    y_axis=1,                 # Y column
+    marker_new=9,
+    exclude_existing_neighbors=True,
+    exclude_same_branch=True,
+):
+    """
+    For remaining degree-1 vertices (leaves) whose (X,Y) coordinates lie in the
+    middle 80% quantile range (per-axis), connect each to its nearest k points,
+    excluding points on the same branch.
+    """
+    P = np.asarray(points, dtype=float)
+    E = np.asarray(edges_full_or_uv)
+    has_marker = (E.ndim == 2 and E.shape[1] >= 3)
+
+    uv = E[:, :2].astype(int) if E.size else np.empty((0, 2), dtype=int)
+    uv = _dedup_undirected_edges_uv(uv)
+
+    leaves, deg = _degree1_vertices(uv)
+    if len(leaves) == 0:
+        return P, E
+
+    adj = _build_adj(uv)
+
+    # --- XY-only interior bounds ---
+    q = float(interior_quantile)
+    xs = P[:, int(x_axis)]
+    ys = P[:, int(y_axis)]
+
+    x_lo, x_hi = np.quantile(xs, [q, 1.0 - q])
+    y_lo, y_hi = np.quantile(ys, [q, 1.0 - q])
+
+    interior_leaves = [
+        int(u) for u in leaves
+        if (x_lo <= P[int(u), x_axis] <= x_hi) and
+           (y_lo <= P[int(u), y_axis] <= y_hi)
+    ]
+
+    if len(interior_leaves) == 0:
+        return P, E
+
+    existing = set(map(tuple, np.sort(uv, axis=1)))
+    new_edges = []
+
+    for u in interior_leaves:
+        forbid = {int(u)}
+
+        if exclude_existing_neighbors:
+            forbid.update(int(v) for v in adj.get(u, []))
+
+        if exclude_same_branch:
+            forbid.update(_branch_vertices_from_leaf(u, adj, deg))
+
+        d = np.linalg.norm(P - P[u], axis=1)
+        d[list(forbid)] = np.inf
+
+        nn = np.argsort(d)[:k]
+        for w in nn:
+            if not np.isfinite(d[w]):
+                continue
+            key = tuple(sorted((int(u), int(w))))
+            if key in existing:
+                continue
+            new_edges.append([int(u), int(w)])
+            existing.add(key)
+
+    if not new_edges:
+        return P, E
+
+    uv2 = np.vstack([uv, np.asarray(new_edges, dtype=int)])
+    uv2 = _dedup_undirected_edges_uv(uv2)
+
+    if has_marker:
+        orig_full = E[:, :3].astype(int)
+        orig_map = {
+            tuple(sorted(map(int, orig_full[i, :2]))): int(orig_full[i, 2])
+            for i in range(orig_full.shape[0])
+        }
+        full = []
+        for a, b in uv2:
+            key = tuple(sorted((int(a), int(b))))
+            m = orig_map.get(key, int(marker_new))
+            full.append([int(a), int(b), int(m)])
+        return P, np.asarray(full, dtype=int)
+
+    return P, uv2
 
 
+def remove_isolated_points(P, E_full_or_uv):
+    P = np.asarray(P, float)
+    E = np.asarray(E_full_or_uv)
+    has_marker = (E.ndim == 2 and E.shape[1] >= 3)
 
+    if E.size == 0:
+        return P[:0], E  # no edges => everything is isolated
 
+    uv = E[:, :2].astype(int).reshape(-1, 2)
 
+    used = np.zeros(P.shape[0], dtype=bool)
+    used[uv[:, 0]] = True
+    used[uv[:, 1]] = True
 
+    old_idx = np.flatnonzero(used)
+    old_to_new = -np.ones(P.shape[0], dtype=int)
+    old_to_new[old_idx] = np.arange(old_idx.size)
 
+    P2 = P[old_idx]
 
+    uv2 = old_to_new[uv]  # remap endpoints
 
-
-
-
-
-
+    if has_marker:
+        m = E[:, 2].astype(int).reshape(-1, 1)
+        E2 = np.hstack([uv2, m])
+        return P2, E2
+    else:
+        return P2, uv2
 
 if __name__ == "__main__":
-    edges_path = "C:/Users/samue/Downloads/Research/Spider/Current/DisconnectedComp/edge_detour_filtered.txt"
-    points_path = "C:/Users/samue/Downloads/Research/Spider/Current/DisconnectedComp/sorted-feature.txt"
+    edges_path = "C:/Users/samue/Downloads/Research/Spider/Current/DisconnectedComp/edge_detour_filtered1.txt"
+    points_path = "C:/Users/samue/Downloads/Research/Spider/Current/DisconnectedComp/sorted-feature1.txt"
 
     
     P = np.loadtxt(points_path)
@@ -569,15 +703,39 @@ if __name__ == "__main__":
     points_final, edges_final = beam_latch_from_degree1(
     points_rays,
     edges_pruned2,
-    beam_radius=100.0,   # can be slightly larger than ray tol
+    beam_radius=60.0,   # can be slightly larger than ray tol
     pick="forward"
     )
 
+    P_clean, E_clean = remove_isolated_points(points_final, edges_final)
 
 
+#     edges_final, _ = prune_degree1_once(edges_final)
+
+#     P_final, E_final = connect_remaining_leaves_to_k_nearest(
+#     points_final,   # from beam stage
+#     edges_final,
+#     k=2,
+#     max_dist=1000000000,          # or set to something like 10 or 20 to prevent crazy long edges
+#     exclude_neighbor=True,
+#     marker_new=9
+# )
+
+#     print("done")
+
+
+    P2, E2 =  connect_interior_leaves_to_nearest_k_no_same_branch_xy(
+    P_clean,
+    E_clean,
+    k=2,
+    interior_quantile=0.10,  # middle 80%
+    x_axis=0,                # X
+    y_axis=1                 # Y
+)
+    
     visualize_degree1_vertices(
-    points_final,
-    edges_final,
+    P2,
+    E2,
     sphere_radius=5.0
     )
 
