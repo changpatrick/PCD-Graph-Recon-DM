@@ -227,7 +227,7 @@ def _closest_points_on_segments(p1, q1, p2, q2, eps=1e-12):
     dist = float(np.linalg.norm(c1 - c2))
     return c1, c2, dist, s, t
 
-
+#Shoots a short ray segment outwards from new dangling endpoints. Whenever two such outward segments come close, you “snap” them together by creating a new vertex at the near-intersection location and connecting both endpoints to it.  
 def grow_rays_and_connect(points, edges_full_or_uv, tol=1.0, connect_triangle=False):
     """
     points: (N,3)
@@ -323,6 +323,214 @@ def grow_rays_and_connect(points, edges_full_or_uv, tol=1.0, connect_triangle=Fa
     return P2, uv2
 
 
+
+
+# Computes for candidate points the projection distance along the ray direction and perpendicular distance from point to ray line
+#necessary for following function
+def _point_to_ray_metrics(Pu: np.ndarray, d: np.ndarray, X: np.ndarray):
+    """
+    Pu: (3,)
+    d : (3,) unit direction
+    X : (K,3) candidate points
+    Returns:
+      t: (K,) signed distance along ray (projection)
+      perp: (K,) perpendicular distance to ray line
+    """
+    w = X - Pu  # (K,3)
+    t = w @ d   # (K,)
+    perp_vec = w - np.outer(t, d)  # (K,3)
+    perp = np.linalg.norm(perp_vec, axis=1)
+    return t, perp
+
+
+
+
+
+#make it so each deg 1 vertex shoots out a beam to latch onto closest point.
+
+#shoots a beam in the direction the line segement the leaf is on already, but it si a fat beam.
+#Then, of the other points caught in the beam, we grab them as our candidate set.
+def _ray_beam_candidates(Pu, d_hat, P_all, beam_radius, max_length, exclude_idx=()):
+    """
+    Pu: (3,) ray origin
+    d_hat: (3,) unit direction
+    P_all: (N,3) all points
+    Returns:
+      cand_idx: indices of points inside the fat beam (tube) in front of Pu
+      t:        forward distances along ray for cand_idx (used for "closest along ray")
+      perp:     perpendicular distances to ray for cand_idx
+    """
+    # Vector from origin to all points
+    W = P_all - Pu                    # (N,3)
+    t = W @ d_hat                     # (N,) projection along direction
+
+    # Keep only points in front and within length
+    mask = (t > 0) & (t <= max_length)
+
+    if np.any(mask):
+        # Perpendicular distance to ray line
+        Wm = W[mask]
+        tm = t[mask]
+        perp_vec = Wm - tm[:, None] * d_hat[None, :]
+        perp = np.linalg.norm(perp_vec, axis=1)
+
+        # Inside beam radius
+        mask2 = perp <= beam_radius
+        idx_mask = np.flatnonzero(mask)
+        cand_idx = idx_mask[mask2]
+        t_keep = tm[mask2]
+        perp_keep = perp[mask2]
+    else:
+        cand_idx = np.array([], dtype=int)
+        t_keep = np.array([], dtype=float)
+        perp_keep = np.array([], dtype=float)
+
+    if exclude_idx:
+        exclude_idx = set(int(x) for x in exclude_idx)
+        if cand_idx.size > 0:
+            keep = np.array([int(i) not in exclude_idx for i in cand_idx], dtype=bool)
+            cand_idx = cand_idx[keep]
+            t_keep = t_keep[keep]
+            perp_keep = perp_keep[keep]
+
+    return cand_idx, t_keep, perp_keep
+
+
+
+#Finds nearest candidate to connect to basically
+def beam_latch_from_degree1(
+    points,
+    edges_full_or_uv,
+    beam_radius=5.0,
+    max_length=None,          # if None: uses max edge length (you already have _max_edge_length)
+    pick="forward",           # "forward" (min t) or "euclid" (min ||P[w]-P[u]||)
+    perp_tiebreak=True,       # break ties by smaller perp distance
+    marker_new=9
+):
+    """
+    For each degree-1 vertex u:
+      - direction = (P[u] - P[v]) where v is u's only neighbor
+      - find all vertices within a fat beam (tube) along that direction
+      - pick the closest candidate among those
+      - add edge (u, candidate)
+
+    Returns:
+      P2 (same as P), E2 with added edges (marker preserved if present)
+    """
+    P = np.asarray(points, dtype=float)
+    E = np.asarray(edges_full_or_uv)
+    has_marker = (E.ndim == 2 and E.shape[1] >= 3)
+
+    uv = E[:, :2].astype(int) if E.size else np.empty((0, 2), dtype=int)
+    uv = _dedup_undirected_edges_uv(uv)  # you already have this
+
+    deg1, deg = _degree1_vertices(uv)    # you already have this
+    if len(deg1) == 0:
+        return P, E
+
+    adj = _build_adj(uv)                 # you already have this
+
+    # Ray length scale
+    L = _max_edge_length(P, uv) if max_length is None else float(max_length)
+    if L <= 0:
+        return P, E
+
+    # Existing edges set to avoid duplicates
+    existing = set(map(tuple, np.sort(uv, axis=1)))
+
+    new_edges = []
+
+    for u in deg1:
+        u = int(u)
+        nbrs = adj.get(u, [])
+        if len(nbrs) != 1:
+            continue
+        v = int(nbrs[0])
+
+        d = P[u] - P[v]      # outward continuation of the leaf's segment
+        n = np.linalg.norm(d)
+        if n == 0:
+            continue
+        d_hat = d / n
+
+        # candidates inside fat beam; exclude self + neighbor
+        cand_idx, t, perp = _ray_beam_candidates(
+            Pu=P[u],
+            d_hat=d_hat,
+            P_all=P,
+            beam_radius=float(beam_radius),
+            max_length=float(L),
+            exclude_idx=(u, v)
+        )
+
+        if cand_idx.size == 0:
+            continue
+
+        # choose best candidate
+        if pick == "forward":
+            # minimize forward distance along ray (closest hit in front)
+            order = np.argsort(t)
+            if perp_tiebreak:
+                # stable-ish: sort by t first, then perp
+                # (numpy lexsort uses last key as primary)
+                order = np.lexsort((perp, t))
+            w = int(cand_idx[order[0]])
+        elif pick == "euclid":
+            dists = np.linalg.norm(P[cand_idx] - P[u], axis=1)
+            order = np.argsort(dists)
+            if perp_tiebreak:
+                # tie-break by perp as secondary
+                order = np.lexsort((perp, dists))
+            w = int(cand_idx[order[0]])
+        else:
+            raise ValueError("pick must be 'forward' or 'euclid'")
+
+        key = tuple(sorted((u, w)))
+        if key in existing:
+            continue
+
+        new_edges.append([u, w])
+        existing.add(key)
+
+    if not new_edges:
+        return P, E
+
+    uv2 = np.vstack([uv, np.asarray(new_edges, dtype=int)])
+    uv2 = _dedup_undirected_edges_uv(uv2)
+
+    # Preserve markers if present, mark new ones
+    if has_marker:
+        orig_full = E[:, :3].astype(int)
+        orig_map = {tuple(sorted(map(int, orig_full[k, :2]))): int(orig_full[k, 2])
+                    for k in range(orig_full.shape[0])}
+        full = []
+        for a, b in uv2:
+            key = tuple(sorted((int(a), int(b))))
+            m = orig_map.get(key, int(marker_new))
+            full.append([int(a), int(b), int(m)])
+        return P, np.asarray(full, dtype=int)
+
+    return P, uv2
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 if __name__ == "__main__":
     edges_path = "C:/Users/samue/Downloads/Research/Spider/Current/DisconnectedComp/edge_detour_filtered.txt"
     points_path = "C:/Users/samue/Downloads/Research/Spider/Current/DisconnectedComp/sorted-feature.txt"
@@ -348,18 +556,30 @@ if __name__ == "__main__":
 
 
         
-    points_grown, edges_grown_full = grow_rays_and_connect(
-        P,
-        pruned,
-        tol=5,               # pick based on your units (try 1, 5, 10, ...)
-        connect_triangle=False  # set True if you want the 3rd edge between endpoints
+    points_rays, edges_rays = grow_rays_and_connect(
+    P,
+    pruned,
+    tol=5.0,                 # tighter than beam radius
+    connect_triangle=False
+    )
+
+    edges_pruned2, _ = prune_degree1_once(edges_rays)
+
+
+    points_final, edges_final = beam_latch_from_degree1(
+    points_rays,
+    edges_pruned2,
+    beam_radius=100.0,   # can be slightly larger than ray tol
+    pick="forward"
     )
 
 
 
-    visualize_degree1_vertices(points_grown, edges_grown_full, sphere_radius=5.0)
+    visualize_degree1_vertices(
+    points_final,
+    edges_final,
+    sphere_radius=5.0
+    )
 
 
 
-
-    # TO DO: make it so each deg 1 vertex shoots out a beam to latch onto closest point.
