@@ -45,6 +45,30 @@ Step 3 should output a visualization of the web. MomentumConnect.py handles remo
    - `--persistence-threshold`: Persistence threshold (default 0.99).
 
    The script outputs the filtered graph to `results/<dataset>-pcd/edge_detour_filtered.txt`.
+ 
+ 
+ ### Refinement Pipeline (RayRecon)
+ 
+ After generating the initial filtered graph, you can use the `RayRecon` script to perform various topological refinements, such as closing gaps, latching endpoints, and simplifying the graph structure.
+ 
+ **How to Run:**
+ ```bash
+ python3 RayRecon/RayRecon_simplified.py
+ ```
+ *(Note: Update the `points_path` and `edges_path` in the `__main__` block of the script to point to your data.)*
+ 
+ #### Key Refinement Functions:
+ 
+ | Function | Description |
+ | :--- | :--- |
+ | `grow_rays_and_connect` | Shoots rays from dangling endpoints to snap nearby branches together. |
+ | `beam_latch_from_degree1` | Shoots a "fat beam" (cylinder) from endpoints to connect to the nearest surface point. |
+ | `simplify_chains` | Collapses chains of degree-2 vertices into single direct edges (Skeletonization). |
+ | `collapse_small_triangles` | Merges 3-cliques into a single vertex at their centroid to remove jittery noise. |
+ | `prune_degree1_once` | Removes "hair" (single-edge branches) from the graph. |
+ 
+ 
+ 
 
 
 
