@@ -922,22 +922,22 @@ def export_pajek_net(filepath, points, edges_full_or_uv, use_markers_as_weights=
     N = P.shape[0]
 
     with open(filepath, "w", encoding="utf-8") as f:
-        f.write(f"*Vertices {N}\n")
+        f.write(f"*Vertices {N}/n")
         # Pajek vertex line: id "label" x y
         # We'll use id as label; include z as a trailing comment.
         for i in range(N):
             x, y, z = P[i]
             vid = i + 1  # 1-based
-            f.write(f'{vid} "{vid}" {x:.8f} {y:.8f}  % z={z:.8f}\n')
+            f.write(f'{vid} "{vid}" {x:.8f} {y:.8f}  % z={z:.8f}/n')
 
-        f.write("*Edges\n")  # undirected edges
+        f.write("*Edges/n")  # undirected edges
         for k in range(uv.shape[0]):
             a = int(uv[k, 0]) + 1
             b = int(uv[k, 1]) + 1
             if use_markers_as_weights and w is not None:
-                f.write(f"{a} {b} {w[k]:.6f}\n")
+                f.write(f"{a} {b} {w[k]:.6f}/n")
             else:
-                f.write(f"{a} {b}\n")
+                f.write(f"{a} {b}/n")
 
 
 
@@ -958,7 +958,6 @@ if __name__ == "__main__":
     edges_path = "RayRecon/edge_detour_filtered1.txt"
     points_path = "RayRecon/sorted-feature1.txt"
 
-    
     P = np.loadtxt(points_path)
 
     E = np.loadtxt(edges_path, dtype=int)
@@ -1031,6 +1030,12 @@ if __name__ == "__main__":
     print(f"Edges before triangle collapse: {E_simp.shape[0]}")
     P_final, E_final = collapse_small_triangles(P_simp, E_simp, threshold=10.0)
     print(f"Edges after triangle collapse: {E_final.shape[0]}")
+    
+    np.savez(
+    "RayRecon/graph_data.npz",
+    points=P_final,
+    edges=E_final[:, :2]
+    )
 
     visualize_degree1_vertices(
     P_final,
