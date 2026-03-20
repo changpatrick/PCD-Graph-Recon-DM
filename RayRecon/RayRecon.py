@@ -717,7 +717,60 @@ def export_pajek_net(filepath, points, edges_full_or_uv, use_markers_as_weights=
 
 
 
+def export_pajek_net_format(filepath, points, edges_full_or_uv, use_markers_as_weights=False):
+    """
+    Writes a Pajek .net file in a simple strict format.
 
+    Format:
+    *Vertices N
+    1 "1"
+    2 "2"
+    ...
+    *Edgeslist
+    u v
+    u v
+    ...
+
+    If use_markers_as_weights=True and a 3rd column exists, then:
+    *Edges
+    u v w
+    ...
+    """
+
+    P = np.asarray(points, dtype=float)
+    E = np.asarray(edges_full_or_uv)
+
+    N = P.shape[0]
+
+    if E.size == 0:
+        uv = np.empty((0, 2), dtype=int)
+        w = None
+    else:
+        if E.ndim != 2 or E.shape[1] < 2:
+            raise ValueError("edges_full_or_uv must have shape (M,2) or (M,3)")
+        uv = E[:, :2].astype(int)
+        w = E[:, 2].astype(float) if E.shape[1] >= 3 else None
+
+    with open(filepath, "w", encoding="utf-8", newline="\n") as f:
+        # Vertices
+        f.write(f"*Vertices {N}\n")
+        for i in range(N):
+            vid = i + 1   # Pajek is 1-based
+            f.write(f'{vid} "{vid}"\n')
+
+        # Edges
+        if use_markers_as_weights and w is not None:
+            f.write("*Edges\n")
+            for k in range(uv.shape[0]):
+                a = int(uv[k, 0]) + 1
+                b = int(uv[k, 1]) + 1
+                f.write(f"{a} {b} {w[k]:.6f}\n")
+        else:
+            f.write("*Edgeslist\n")
+            for k in range(uv.shape[0]):
+                a = int(uv[k, 0]) + 1
+                b = int(uv[k, 1]) + 1
+                f.write(f"{a} {b}\n")
 
 
 
@@ -797,7 +850,7 @@ if __name__ == "__main__":
     y_axis=1                 # Y
 )
     
-    export_pajek_net(
+    export_pajek_net_format(
     "C:/Users/samue/Downloads/Research/Spider/Current/DisconnectedComp/reconstructed.net",
     points_final,
     edges_final,
