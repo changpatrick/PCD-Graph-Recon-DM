@@ -121,6 +121,42 @@ def visualize_degree1_vertices(points, edges_full_or_uv,
     o3d.visualization.draw_geometries(geoms)
 
 
+
+
+def visualize_degree2_vertices(points, edges, sphere_radius=1.0):
+    P = np.asarray(points, dtype=float)
+    uv = np.asarray(edges)[:, :2].astype(int)
+
+    deg = Counter()
+    for u, v in uv:
+        deg[u] += 1
+        deg[v] += 1
+
+    deg2_vertices = [v for v, d in deg.items() if d == 2]
+    print(f"Remaining degree-2 vertices: {len(deg2_vertices)}")
+
+    # Base graph
+    ls = o3d.geometry.LineSet()
+    ls.points = o3d.utility.Vector3dVector(P)
+    ls.lines = o3d.utility.Vector2iVector(uv)
+    ls.paint_uniform_color((0.0, 0.0, 0.0)) # Gray lines
+
+    geoms = [ls]
+
+    # Green spheres at deg-2 locations
+    for idx in deg2_vertices:
+        s = o3d.geometry.TriangleMesh.create_sphere(radius=float(sphere_radius))
+        s.translate(P[int(idx)])
+        s.paint_uniform_color((0.0, 1.0, 0.0)) # Bright Green
+        geoms.append(s)
+
+    o3d.visualization.draw_geometries(geoms)
+
+# Run this at the very end of your script:
+
+
+
+
 #remove all vertices w degree 1, then try growing again from all new vertices w degree 1
 def prune_degree1_once(edges_uv):
     """
@@ -148,6 +184,7 @@ def prune_degree1_once(edges_uv):
 
 
 
+
 def _dedup_undirected_edges_uv(edges_uv: np.ndarray) -> np.ndarray:
     edges_uv = np.asarray(edges_uv, dtype=int).reshape(-1, 2)
     if edges_uv.size == 0:
@@ -155,12 +192,19 @@ def _dedup_undirected_edges_uv(edges_uv: np.ndarray) -> np.ndarray:
     uv = np.sort(edges_uv, axis=1)
     _, idx = np.unique(uv, axis=0, return_index=True)
     return edges_uv[np.sort(idx)]
+
+
+
+
 def _max_edge_length(points: np.ndarray, edges_uv: np.ndarray) -> float:
     edges_uv = np.asarray(edges_uv, dtype=int).reshape(-1, 2)
     if edges_uv.size == 0:
         return 0.0
     d = points[edges_uv[:, 1]] - points[edges_uv[:, 0]]
     return float(np.max(np.linalg.norm(d, axis=1)))
+
+
+
 
 def _degree1_vertices(edges_uv: np.ndarray):
     deg = Counter()
@@ -169,6 +213,9 @@ def _degree1_vertices(edges_uv: np.ndarray):
         deg[int(v)] += 1
     return [v for v, d in deg.items() if d == 1], deg
 
+
+
+
 def _build_adj(edges_uv: np.ndarray):
     adj = defaultdict(list)
     for u, v in edges_uv:
@@ -176,6 +223,8 @@ def _build_adj(edges_uv: np.ndarray):
         adj[u].append(v)
         adj[v].append(u)
     return adj
+
+
 
 
 def _closest_points_on_segments(p1, q1, p2, q2, eps=1e-12):
@@ -226,6 +275,9 @@ def _closest_points_on_segments(p1, q1, p2, q2, eps=1e-12):
     c2 = p2 + d2 * t
     dist = float(np.linalg.norm(c1 - c2))
     return c1, c2, dist, s, t
+
+
+
 
 #Shoots a short ray segment outwards from new dangling endpoints. Whenever two such outward segments come close, you “snap” them together by creating a new vertex at the near-intersection location and connecting both endpoints to it.  
 def grow_rays_and_connect(points, edges_full_or_uv, tol=1.0, connect_triangle=False):
@@ -345,7 +397,6 @@ def _point_to_ray_metrics(Pu: np.ndarray, d: np.ndarray, X: np.ndarray):
 
 
 
-
 #make it so each deg 1 vertex shoots out a beam to latch onto closest point.
 
 #shoots a beam in the direction the line segement the leaf is on already, but it si a fat beam.
@@ -394,6 +445,7 @@ def _ray_beam_candidates(Pu, d_hat, P_all, beam_radius, max_length, exclude_idx=
             perp_keep = perp_keep[keep]
 
     return cand_idx, t_keep, perp_keep
+
 
 
 
@@ -513,6 +565,8 @@ def beam_latch_from_degree1(
     return P, uv2
 
 
+
+
 def _branch_vertices_from_leaf(u: int, adj, deg):
     u = int(u)
     if deg.get(u, 0) != 1:
@@ -540,6 +594,7 @@ def _branch_vertices_from_leaf(u: int, adj, deg):
         branch.add(cur)
 
     return branch
+
 
 
 
@@ -634,12 +689,11 @@ def connect_interior_leaves_to_nearest_k_no_same_branch_xy(
         return P, np.asarray(full, dtype=int)
 
     return P, uv2
+
+
+
+
 def simplify_chains(points, edges_full_or_uv, marker_new=9):
-    """
-    Collapses chains of degree-2 vertices into single direct edges.
-    A chain u - v1 - v2 - ... - vn - w where all vi have degree 2
-    becomes a single edge (u, w).
-    """
     P = np.asarray(points, dtype=float)
     E = np.asarray(edges_full_or_uv)
     has_marker = (E.ndim == 2 and E.shape[1] >= 3)
@@ -649,99 +703,68 @@ def simplify_chains(points, edges_full_or_uv, marker_new=9):
     adj = _build_adj(uv)
     deg = {u: len(nbrs) for u, nbrs in adj.items()}
 
-    processed = set()
-    new_edges = []
-    
-    # Identify non-degree-2 nodes as starting points for traversal
     start_nodes = [u for u, d in deg.items() if d != 2]
-    
-    # If the entire component is a cycle of degree-2, we need at least one start node
-    # so we'll pick one arbitrarily if needed later.
-    
     visited_edges = set()
+    new_edges_uv = []
+    
+    # Track direct connections we've established to prevent deduplication destruction
+    established_connections = set()
 
     for u in start_nodes:
         for v in adj[u]:
             edge = tuple(sorted((u, v)))
             if edge in visited_edges:
                 continue
-            visited_edges.add(edge)
             
-            # Trace the path from u through v
-            curr = v
-            prev = u
+            visited_edges.add(edge)
+            curr, prev = v, u
             path = [u, v]
             
             while deg.get(curr, 0) == 2:
-                # Find the next neighbor that isn't prev
                 nbs = adj[curr]
                 nxt = nbs[0] if nbs[1] == prev else nbs[1]
-                
                 edge_next = tuple(sorted((curr, nxt)))
+                
                 if edge_next in visited_edges:
-                    # We hit a cycle and came back to a node already in our path or elsewhere
                     break
                 
                 visited_edges.add(edge_next)
                 path.append(nxt)
                 prev, curr = curr, nxt
                 
-                if curr == u: # Closed loop back to start
+                if curr == u:
                     break
             
-            # Add edge between path endpoints
-            new_edges.append([path[0], path[-1]])
-
-    # Handle remaining cycles that consist entirely of degree-2 nodes
-    for u in deg:
-        if deg[u] == 2:
-            # Check if any incident edge was visited
-            any_visited = False
-            for v in adj[u]:
-                if tuple(sorted((u, v))) in visited_edges:
-                    any_visited = True
-                    break
-            if any_visited:
+            end_node = path[-1]
+            start_node = path[0]
+            
+            # Check for self-loops (petal from u back to u)
+            if start_node == end_node:
+                # Keep one midpoint to preserve the loop without making a [u, u] edge
+                mid = path[len(path)//2]
+                new_edges_uv.extend([[start_node, mid], [mid, start_node]]) # Technically still a loop, but valid topological edges
                 continue
-            
-            # Found an unvisited cycle. Pick u as start.
-            curr = u
-            prev = None # will pick first neighbor manually
-            path = [u]
-            
-            # First step
-            v = adj[u][0]
-            visited_edges.add(tuple(sorted((u, v))))
-            path.append(v)
-            prev, curr = u, v
-            
-            while curr != u:
-                nbs = adj[curr]
-                nxt = nbs[0] if nbs[1] == prev else nbs[1]
-                
-                visited_edges.add(tuple(sorted((curr, nxt))))
-                if nxt != u:
-                    path.append(nxt)
-                prev, curr = curr, nxt
-            
-            # It's a cycle, so we can represent it as u-v-u or just keep it
-            # To "collapse" a cycle of degree-2s, topologicaly it's a loop.
-            # We can represent it with at least 3 nodes to be a valid triangle
-            # or just leave it. Let's keep one "shortcut" that makes it a loop
-            # BUT the user wants "single threads". A cycle IS a single thread (loop).
-            # We'll just connect the start/end back to itself which might be invalid for some tools,
-            # or keep 3 points. Let's keep 3 points for cycles.
-            if len(path) > 3:
-                new_edges.append([path[0], path[1]])
-                new_edges.append([path[1], path[2]])
-                new_edges.append([path[2], path[0]])
-            else:
-                for i in range(len(path)-1):
-                    new_edges.append([path[i], path[i+1]])
-                new_edges.append([path[-1], path[0]])
 
-    uv2 = np.asarray(new_edges, dtype=int)
-    uv2 = _dedup_undirected_edges_uv(uv2)
+            connection_key = tuple(sorted((start_node, end_node)))
+            
+            # Check for parallel paths
+            if connection_key in established_connections:
+                # We already have a straight line between these junctions. 
+                # Keep one midpoint from this chain to prevent deduplication from destroying the loop.
+                mid = path[len(path)//2]
+                new_edges_uv.append([start_node, mid])
+                new_edges_uv.append([mid, end_node])
+            else:
+                new_edges_uv.append([start_node, end_node])
+                established_connections.add(connection_key)
+
+    # ... (Keep your isolated cycle handling for pure deg-2 components here if desired) ...
+    # But note: Isolated cycles WILL have degree-2 nodes. 
+    # If you want to delete them entirely, just don't append them.
+    
+    uv2 = np.asarray(new_edges_uv, dtype=int)
+    if uv2.size > 0:
+        uv2 = _dedup_undirected_edges_uv(uv2)
 
     if has_marker:
         orig_full = E[:, :3].astype(int)
@@ -755,6 +778,8 @@ def simplify_chains(points, edges_full_or_uv, marker_new=9):
         return P, np.asarray(full, dtype=int)
 
     return P, uv2
+
+
 
 
 def collapse_small_triangles(points, edges_full_or_uv, threshold=5.0, marker_new=9):
@@ -859,8 +884,6 @@ def collapse_small_triangles(points, edges_full_or_uv, threshold=5.0, marker_new
 
 
 
-
-
 def remove_isolated_points(P, E_full_or_uv):
     P = np.asarray(P, float)
     E = np.asarray(E_full_or_uv)
@@ -893,13 +916,6 @@ def remove_isolated_points(P, E_full_or_uv):
 
 
 
-
-
-
-
-
-
-
 def export_pajek_net(filepath, points, edges_full_or_uv, use_markers_as_weights=False):
     """
     Writes a Pajek .net file.
@@ -922,22 +938,22 @@ def export_pajek_net(filepath, points, edges_full_or_uv, use_markers_as_weights=
     N = P.shape[0]
 
     with open(filepath, "w", encoding="utf-8") as f:
-        f.write(f"*Vertices {N}/n")
+        f.write(f"*Vertices {N}\n")
         # Pajek vertex line: id "label" x y
         # We'll use id as label; include z as a trailing comment.
         for i in range(N):
             x, y, z = P[i]
             vid = i + 1  # 1-based
-            f.write(f'{vid} "{vid}" {x:.8f} {y:.8f}  % z={z:.8f}/n')
+            f.write(f'{vid} "{vid}" {x:.8f} {y:.8f}  % z={z:.8f}\n')
 
-        f.write("*Edges/n")  # undirected edges
+        f.write("*Edges\n")  # undirected edges
         for k in range(uv.shape[0]):
             a = int(uv[k, 0]) + 1
             b = int(uv[k, 1]) + 1
             if use_markers_as_weights and w is not None:
-                f.write(f"{a} {b} {w[k]:.6f}/n")
+                f.write(f"{a} {b} {w[k]:.6f}\n")
             else:
-                f.write(f"{a} {b}/n")
+                f.write(f"{a} {b}\n")
 
 
 
@@ -955,9 +971,10 @@ def export_pajek_net(filepath, points, edges_full_or_uv, use_markers_as_weights=
 
 
 if __name__ == "__main__":
-    edges_path = "RayRecon/edge_detour_filtered1.txt"
-    points_path = "RayRecon/sorted-feature1.txt"
+    edges_path = "RayRecon/edge_detour_filtered.txt"
+    points_path = "RayRecon/sorted-feature.txt"
 
+    
     P = np.loadtxt(points_path)
 
     E = np.loadtxt(edges_path, dtype=int)
@@ -1023,25 +1040,22 @@ if __name__ == "__main__":
     
     # --- Simplify Chains ---
     print(f"Edges before simplification: {E2.shape[0]}")
-    P_simp, E_simp = simplify_chains(P2, E2)
-    print(f"Edges after simplification: {E_simp.shape[0]}")
+    P_curr, E_curr = P2, E2
+    prev_edge_count = -1
 
-    # --- Collapse Small Triangles ---
-    print(f"Edges before triangle collapse: {E_simp.shape[0]}")
-    P_final, E_final = collapse_small_triangles(P_simp, E_simp, threshold=10.0)
-    print(f"Edges after triangle collapse: {E_final.shape[0]}")
-    
-    np.savez(
-    "RayRecon/graph_data.npz",
-    points=P_final,
-    edges=E_final[:, :2]
-    )
+    # Iteratively simplify until topology stabilizes
+    while E_curr.shape[0] != prev_edge_count:
+        prev_edge_count = E_curr.shape[0]
+        
+        P_curr, E_curr = simplify_chains(P_curr, E_curr)
+        P_curr, E_curr = collapse_small_triangles(P_curr, E_curr, threshold=25.0)
 
-    visualize_degree1_vertices(
-    P_final,
-    E_final,
-    sphere_radius=5.0
-    )
+    # Finally, strip out the floating points left behind by chain collapsing
+    P_final, E_final = remove_isolated_points(P_curr, E_curr)
+    print(f"Edges after simplification: {E_final.shape[0]}")
+
+    #visualize_degree1_vertices(P_final, E_final, sphere_radius=3.0)
+    visualize_degree2_vertices(P_final, E_final, sphere_radius=3.0)
 
 
 
