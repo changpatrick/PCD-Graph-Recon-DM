@@ -1,0 +1,31 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "pcd_graph_recon"
+version = "0.1.0"
+description = "PCD Graph Reconstruction Python Package"
+readme = "README.md"
+requires-python = ">=3.8"
+dependencies = [
+    "numpy",
+    "open3d",
+    "networkx",
+    "scikit-learn"
+]
+
+[tool.setuptools]
+py-modules = [
+    "MomentumConnect",
+    "UpdatedPipeline",
+    "run_pipeline",
+    "vis",
+    "DisconnectedCounter"
+]
+packages = [
+    "dmpcd",
+    "dmpcd.pcd",
+    "dmpcd.baseline",
+    "pcd_graph_recon"
+]
