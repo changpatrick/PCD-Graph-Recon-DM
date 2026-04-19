@@ -4,6 +4,11 @@
 sparse-weighted-rips.py: runs discrete morse graph reconstruction with sparse weighted rips on features.txt, a commented out code chunk includes how to create features.txt from pcd
 DetourFilter.py: runs detour filtering on the result from sparse-weighted-rips.py
 vis.py: visualizes points, unfiltered lines, and detour filtered lines from 
+full_pipeline.py: alternate pipeline which combines skeletonization, graph recon, rayrecon, detour filter, and extra cleaning. 
+```bash
+python3 full_pipeline.py <dataset_folder> <pcd_file_name> [options (recommend voxel size of 5)]
+```
+skeletonize.py: skeletonizes original pcd
 
 ### Current Pipeline
 0. Generate pcd (possibly using mixed resolution downsampling)
@@ -17,7 +22,11 @@ Step 3 should output a visualization of the web. MomentumConnect.py handles remo
 ### Unified Pipeline (Recommended)
 0. Generate pcd (possibly using mixed resolution downsampling)
 1. Upload pcd into data/name_of_web/ (e.g. data/tangle01)
-2. Run the unified pipeline script:
+2. Run skeletonization, this will output {pcd_file_name}-skeleton.pcd (If using skeletonization, use lower voxel size for future steps):
+   ```bash
+   python3 skeletonize.py <dataset_folder> <pcd_file_name>
+   ```
+4. Run the unified pipeline script:
    ```bash
    python3 run_pipeline.py <dataset_folder> <pcd_file_name> [options]
    ```
