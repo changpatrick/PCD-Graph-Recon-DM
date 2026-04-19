@@ -148,7 +148,7 @@ if __name__ == "__main__":
     parser.add_argument("pcd_name", type=str, help="Name of the point cloud file (e.g., file.pcd)")
     args = parser.parse_args()
 
-    input_path = os.path.join(args.dataset_folder, args.pcd_name)
+    input_path = os.path.join("data", args.dataset_folder, args.pcd_name)
 
     if not os.path.exists(input_path):
         print(f"Error: Could not find file at '{input_path}'")
@@ -284,7 +284,7 @@ if __name__ == "__main__":
     # --- Formatting the Output Name and Saving ---
     base_name = os.path.splitext(args.pcd_name)[0] # Strips the .pcd extension
     output_filename = f"{base_name}-skeleton.pcd"
-    output_path = os.path.join(args.dataset_folder, output_filename)
+    output_path = os.path.join("data", args.dataset_folder, output_filename)
 
     print(f"\nSaving final skeletonized point cloud to: {output_path}")
     o3d.io.write_point_cloud(output_path, final_pcd)
