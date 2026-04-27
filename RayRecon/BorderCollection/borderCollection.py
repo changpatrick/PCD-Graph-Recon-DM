@@ -133,7 +133,7 @@ if __name__ == "__main__":
         points=P,
         edges=E,
         epsilon=15.0,
-        allowed_degrees={1, 2}
+        # allowed_degrees={1, 2}
     )
 
     print("num border points:", len(border_idx))
