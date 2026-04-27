@@ -2,6 +2,7 @@ import networkx as nx
 import numpy as np
 from collections import Counter, defaultdict
 import open3d as o3d
+import argparse
 
 
 def num_components_from_edges(edges, n_nodes=None):
@@ -774,94 +775,244 @@ def export_pajek_net_format(filepath, points, edges_full_or_uv, use_markers_as_w
 
 
 
-
-
-
-
-
-
-
-
-if __name__ == "__main__":
-    edges_path = "C:/Users/samue/Downloads/Research/Spider/Current/DisconnectedComp/edge_detour_filtered1.txt"
-    points_path = "C:/Users/samue/Downloads/Research/Spider/Current/DisconnectedComp/sorted-feature1.txt"
-
-    
+def rebuild_graph_in_memory(
+    points_path,
+    edges_path,
+    ray_tol=5.0,
+    beam_radius=60.0,
+    k=2,
+    interior_quantile=0.10,
+):
+    # Load files
     P = np.loadtxt(points_path)
-
     E = np.loadtxt(edges_path, dtype=int)
-    if E.ndim == 1 and E.size > 0:
-        E = E.reshape(1, -1) 
 
+    if E.ndim == 1 and E.size > 0:
+        E = E.reshape(1, -1)
+
+    # Clean duplicate edges
     E = deduplicate_edges(E)
 
-    print(f"number of connected components: {count_components(P,E)}")
+    print(f"number of connected components before: {count_components(P, E)}")
+    print(f"number of deg 1 vertices before: {num_degree_one_vertices(E)}")
 
-    
-    print(f"number of deg 1 vert: {num_degree_one_vertices(E)}")
-
-
+    # Step 1: prune dangling leaves once
     pruned, leaves = prune_degree1_once(E)
 
-    # visualize_degree1_vertices(P, pruned, sphere_radius=5.0)
+    # Step 2: grow rays from pruned graph
+    points_rays, edges_rays = grow_rays_and_connect(
+        P,
+        pruned,
+        tol=ray_tol,
+        connect_triangle=False
+    )
+
+    # Step 3: prune again before beam latch
+    edges_pruned2, _ = prune_degree1_once(edges_rays)
+
+    # Step 4: beam latch
+    points_final, edges_final = beam_latch_from_degree1(
+        points_rays,
+        edges_pruned2,
+        beam_radius=beam_radius,
+        pick="forward"
+    )
+
+    # Step 5: remove isolated points
+    P_clean, E_clean = remove_isolated_points(points_final, edges_final)
+
+    # Step 6: connect remaining interior leaves
+    P2, E2 = connect_interior_leaves_to_nearest_k_no_same_branch_xy(
+        P_clean,
+        E_clean,
+        k=k,
+        interior_quantile=interior_quantile,
+        x_axis=0,
+        y_axis=1
+    )
+
+    print(f"number of connected components after: {count_components(P2, E2)}")
+    print(f"number of deg 1 vertices after: {num_degree_one_vertices(E2)}")
+
+    return P2, E2
+
+
+
+
+
+
+
+# if __name__ == "__main__":
+#     edges_path = "C:/Users/samue/Downloads/Research/Spider/Current/DisconnectedComp/edge_detour_filtered1.txt"
+#     points_path = "C:/Users/samue/Downloads/Research/Spider/Current/DisconnectedComp/sorted-feature1.txt"
+
+    
+#     P = np.loadtxt(points_path)
+
+#     E = np.loadtxt(edges_path, dtype=int)
+#     if E.ndim == 1 and E.size > 0:
+#         E = E.reshape(1, -1) 
+
+#     E = deduplicate_edges(E)
+
+#     print(f"number of connected components: {count_components(P,E)}")
+
+    
+#     print(f"number of deg 1 vert: {num_degree_one_vertices(E)}")
+
+
+#     pruned, leaves = prune_degree1_once(E)
+
+#     # visualize_degree1_vertices(P, pruned, sphere_radius=5.0)
 
 
         
+#     points_rays, edges_rays = grow_rays_and_connect(
+#     P,
+#     pruned,
+#     tol=5.0,                 # tighter than beam radius
+#     connect_triangle=False
+#     )
+
+#     edges_pruned2, _ = prune_degree1_once(edges_rays)
+
+
+#     points_final, edges_final = beam_latch_from_degree1(
+#     points_rays,
+#     edges_pruned2,
+#     beam_radius=60.0,   # can be slightly larger than ray tol
+#     pick="forward"
+#     )
+
+#     P_clean, E_clean = remove_isolated_points(points_final, edges_final)
+
+
+# #     edges_final, _ = prune_degree1_once(edges_final)
+
+# #     P_final, E_final = connect_remaining_leaves_to_k_nearest(
+# #     points_final,   # from beam stage
+# #     edges_final,
+# #     k=2,
+# #     max_dist=1000000000,          # or set to something like 10 or 20 to prevent crazy long edges
+# #     exclude_neighbor=True,
+# #     marker_new=9
+# # )
+
+# #     print("done")
+
+
+#     P2, E2 =  connect_interior_leaves_to_nearest_k_no_same_branch_xy(
+#     P_clean,
+#     E_clean,
+#     k=2,
+#     interior_quantile=0.10,  # middle 80%
+#     x_axis=0,                # X
+#     y_axis=1                 # Y
+# )
+    
+#     export_pajek_net_format(
+#     "C:/Users/samue/Downloads/Research/Spider/Current/DisconnectedComp/reconstructed.net",
+#     points_final,
+#     edges_final,
+#     use_markers_as_weights=True  # optional
+# )
+    
+#     visualize_degree1_vertices(
+#     P2,
+#     E2,
+#     sphere_radius=5.0
+#     )
+
+
+def parse_args():
+    parser = argparse.ArgumentParser(description="Spiderweb graph reconstruction pipeline")
+
+    parser.add_argument("--edges", required=True, help="Path to edge_detour_filtered.txt")
+    parser.add_argument("--points", required=True, help="Path to sorted-feature.txt")
+    parser.add_argument("--output", required=True, help="Output .net file path")
+
+    # tunable parameters
+    parser.add_argument("--ray-tol", type=float, default=5.0, help="Tolerance for ray connection")
+    parser.add_argument("--beam-radius", type=float, default=60.0, help="Beam latch radius")
+    parser.add_argument("--k", type=int, default=2, help="k for nearest neighbor connection")
+    parser.add_argument("--interior-quantile", type=float, default=0.10, help="Interior filtering quantile")
+
+    return parser.parse_args()
+
+
+def main():
+    args = parse_args()
+
+    # --- Load data ---
+    P = np.loadtxt(args.points)
+
+    E = np.loadtxt(args.edges, dtype=int)
+    if E.ndim == 1 and E.size > 0:
+        E = E.reshape(1, -1)
+
+    E = deduplicate_edges(E)
+
+    # --- Stats ---
+    print(f"number of connected components: {count_components(P, E)}")
+    print(f"number of deg 1 vert: {num_degree_one_vertices(E)}")
+
+    # --- Prune ---
+    pruned, leaves = prune_degree1_once(E)
+
+    # --- Ray growth ---
     points_rays, edges_rays = grow_rays_and_connect(
-    P,
-    pruned,
-    tol=5.0,                 # tighter than beam radius
-    connect_triangle=False
+        P,
+        pruned,
+        tol=args.ray_tol,
+        connect_triangle=False
     )
 
     edges_pruned2, _ = prune_degree1_once(edges_rays)
 
-
+    # --- Beam latch ---
     points_final, edges_final = beam_latch_from_degree1(
-    points_rays,
-    edges_pruned2,
-    beam_radius=60.0,   # can be slightly larger than ray tol
-    pick="forward"
+        points_rays,
+        edges_pruned2,
+        beam_radius=args.beam_radius,
+        pick="forward"
     )
 
+    # --- Clean ---
     P_clean, E_clean = remove_isolated_points(points_final, edges_final)
 
+    # --- Interior leaf connection ---
+    P2, E2 = connect_interior_leaves_to_nearest_k_no_same_branch_xy(
+        P_clean,
+        E_clean,
+        k=args.k,
+        interior_quantile=args.interior_quantile,
+        x_axis=0,
+        y_axis=1
+    )
 
-#     edges_final, _ = prune_degree1_once(edges_final)
-
-#     P_final, E_final = connect_remaining_leaves_to_k_nearest(
-#     points_final,   # from beam stage
-#     edges_final,
-#     k=2,
-#     max_dist=1000000000,          # or set to something like 10 or 20 to prevent crazy long edges
-#     exclude_neighbor=True,
-#     marker_new=9
-# )
-
-#     print("done")
-
-
-    P2, E2 =  connect_interior_leaves_to_nearest_k_no_same_branch_xy(
-    P_clean,
-    E_clean,
-    k=2,
-    interior_quantile=0.10,  # middle 80%
-    x_axis=0,                # X
-    y_axis=1                 # Y
-)
-    
+    # --- Export ---
     export_pajek_net_format(
-    "C:/Users/samue/Downloads/Research/Spider/Current/DisconnectedComp/reconstructed.net",
-    points_final,
-    edges_final,
-    use_markers_as_weights=True  # optional
-)
-    
+        args.output,
+        P2,
+        E2,
+        use_markers_as_weights=True
+    )
+
+    # --- Visualize ---
     visualize_degree1_vertices(
-    P2,
-    E2,
-    sphere_radius=5.0
+        P2,
+        E2,
+        sphere_radius=5.0
     )
 
 
+if __name__ == "__main__":
+    main()
 
+
+'''
+python RayRecon.py \
+  --points  "C:/Users/samue/Downloads/Research/Spider/Current/DisconnectedComp/edge_detour_filtered1.txt" \
+  --edges "C:/Users/samue/Downloads/Research/Spider/Current/DisconnectedComp/sorted-feature1.txt" \
+  --output "C:/Users/samue/Downloads/Research/Spider/Current/DisconnectedComp/recon.net"
+'''

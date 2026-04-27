@@ -915,45 +915,40 @@ def remove_isolated_points(P, E_full_or_uv):
 
 
 
-
-def export_pajek_net(filepath, points, edges_full_or_uv, use_markers_as_weights=False):
+def export_pajek_net(filepath, points, edges_full_or_uv):
     """
-    Writes a Pajek .net file.
+    Export points and edges to Pajek .net format.
 
-    points: (N,3) float array (we export x,y; keep z in a comment)
-    edges_full_or_uv: (M,2) or (M,3) int array; first two cols are (u,v), optional marker/weight.
-
-    Pajek uses 1-based vertex indices.
+    Format:
+    *Vertices N
+    1 "1" x y  % z=z
+    ...
+    *Edges
+    1 2
+    ...
     """
+
     P = np.asarray(points, dtype=float)
     E = np.asarray(edges_full_or_uv)
 
     if E.size == 0:
         uv = np.empty((0, 2), dtype=int)
-        w = None
     else:
+        if E.ndim == 1:
+            E = E.reshape(1, -1)
         uv = E[:, :2].astype(int)
-        w = E[:, 2].astype(float) if (E.ndim == 2 and E.shape[1] >= 3) else None
-
-    N = P.shape[0]
 
     with open(filepath, "w", encoding="utf-8") as f:
-        f.write(f"*Vertices {N}\n")
-        # Pajek vertex line: id "label" x y
-        # We'll use id as label; include z as a trailing comment.
-        for i in range(N):
-            x, y, z = P[i]
-            vid = i + 1  # 1-based
-            f.write(f'{vid} "{vid}" {x:.8f} {y:.8f}  % z={z:.8f}\n')
+        f.write(f"*Vertices {P.shape[0]}\n")
 
-        f.write("*Edges\n")  # undirected edges
-        for k in range(uv.shape[0]):
-            a = int(uv[k, 0]) + 1
-            b = int(uv[k, 1]) + 1
-            if use_markers_as_weights and w is not None:
-                f.write(f"{a} {b} {w[k]:.6f}\n")
-            else:
-                f.write(f"{a} {b}\n")
+        for i, (x, y, z) in enumerate(P, start=1):
+            f.write(f'{i} "{i}" {x:.8f} {y:.8f}  % z={z:.8f}\n')
+
+        f.write("*Edges\n")
+
+        for u, v in uv:
+            # Convert Python 0-based indices to Pajek 1-based indices
+            f.write(f"{int(u) + 1} {int(v) + 1}\n")
 
 
 
@@ -963,16 +958,83 @@ def export_pajek_net(filepath, points, edges_full_or_uv, use_markers_as_weights=
 
 
 
+import numpy as np
 
 
+def rebuild_graph_from_arrays(
+    P,
+    E,
+    ray_tol=5.0,
+    beam_radius=60.0,
+    k=2,
+    interior_quantile=0.10,
+    triangle_threshold=25.0,
+):
+    if E.ndim == 1 and E.size > 0:
+        E = E.reshape(1, -1)
+
+    E = deduplicate_edges(E)
+
+    print(f"number of connected components: {count_components(P, E)}")
+    print(f"number of deg 1 vert: {num_degree_one_vertices(E)}")
+
+    pruned, leaves = prune_degree1_once(E)
+
+    points_rays, edges_rays = grow_rays_and_connect(
+        P,
+        pruned,
+        tol=ray_tol,
+        connect_triangle=False,
+    )
+
+    edges_pruned2, _ = prune_degree1_once(edges_rays)
+
+    points_final, edges_final = beam_latch_from_degree1(
+        points_rays,
+        edges_pruned2,
+        beam_radius=beam_radius,
+        pick="forward",
+    )
+
+    P_clean, E_clean = remove_isolated_points(points_final, edges_final)
+
+    P2, E2 = connect_interior_leaves_to_nearest_k_no_same_branch_xy(
+        P_clean,
+        E_clean,
+        k=k,
+        interior_quantile=interior_quantile,
+        x_axis=0,
+        y_axis=1,
+    )
+
+    print(f"Edges before simplification: {E2.shape[0]}")
+
+    P_curr, E_curr = P2, E2
+    prev_edge_count = -1
+
+    while E_curr.shape[0] != prev_edge_count:
+        prev_edge_count = E_curr.shape[0]
+
+        P_curr, E_curr = simplify_chains(P_curr, E_curr)
+        P_curr, E_curr = collapse_small_triangles(
+            P_curr,
+            E_curr,
+            threshold=triangle_threshold,
+        )
+
+    P_final, E_final = remove_isolated_points(P_curr, E_curr)
+
+    print(f"Edges after simplification: {E_final.shape[0]}")
+
+    return P_final, E_final
 
 
 
 
 
 if __name__ == "__main__":
-    edges_path = "RayRecon/edge_detour_filtered.txt"
-    points_path = "RayRecon/sorted-feature.txt"
+    edges_path = "C:/Users/samue/Downloads/Research/Spider/PCD-Graph-Recon-DM/RayRecon/edge_detour_filtered.txt"
+    points_path = "C:/Users/samue/Downloads/Research/Spider/PCD-Graph-Recon-DM/RayRecon/sorted-feature.txt"
 
     
     P = np.loadtxt(points_path)
@@ -1050,12 +1112,23 @@ if __name__ == "__main__":
         P_curr, E_curr = simplify_chains(P_curr, E_curr)
         P_curr, E_curr = collapse_small_triangles(P_curr, E_curr, threshold=25.0)
 
+
+
+
+
     # Finally, strip out the floating points left behind by chain collapsing
     P_final, E_final = remove_isolated_points(P_curr, E_curr)
     print(f"Edges after simplification: {E_final.shape[0]}")
 
+
+     #Pajeck
+    export_pajek_net("C:/Users/samue/Downloads/Research/Spider/PCD-Graph-Recon-DM/RayRecon/output.net", P_final, E_final)
+
+
     #visualize_degree1_vertices(P_final, E_final, sphere_radius=3.0)
     visualize_degree2_vertices(P_final, E_final, sphere_radius=3.0)
+
+
 
 
 
