@@ -215,6 +215,26 @@ def estimate_rough_transform(source_skel, target_skel):
 # =========================================================
 # TOPO FIX LOGIC
 # =========================================================
+
+'''
+Basically, im trying to use topology to get the last small adjustments to merge the two webs. Instead of comparing points, i want to compare threads based on where it is, which way it goes, and what it connects.
+
+I run 3 checks to see if 2 local threads are the same:
+1. reasonable distance: Take the midpoint of each edge, and measure/compare distance
+2. Direction/orientation: Compare direction vectors + use dot product
+3. Endpoints and structure: CHeck if endpoints the same
+
+
+'''
+
+
+
+
+
+
+
+
+
 #For each edge in scan 2, compare it against nearby edges in scan 1.
 def edge_match_score(e1, e2):
     # midpoint distance
@@ -442,7 +462,9 @@ def main():
 
     try:
         print("\n=== 1. Reconstructing graph for scan 1 ===")
-        result1 = generate_graph(args.pcd1)
+        pcd1 = o3d.io.read_point_cloud(args.pcd1)
+
+        result1 = generate_graph(pcd1)
 
         points1 = np.loadtxt(result1["nodes"])
         edges1 = np.loadtxt(result1["edges"], dtype=int)
@@ -452,7 +474,8 @@ def main():
         print(f"Scan 1 graph: {len(P_graph_1)} vertices, {len(E_graph_1)} edges")
 
         print("\n=== 2. Reconstructing graph for scan 2 ===")
-        result2 = generate_graph(args.pcd2)
+        pcd2 = o3d.io.read_point_cloud(args.pcd2)
+        result2 = generate_graph(pcd2)
 
         points2 = np.loadtxt(result2["nodes"])
         edges2 = np.loadtxt(result2["edges"], dtype=int)
