@@ -113,81 +113,420 @@ def skeletonize(pcd_path):
     final_pcd.points = o3d.utility.Vector3dVector(np.vstack((base_points, accum_new)) if len(accum_new) > 0 else base_points)
     return final_pcd
 
+#convert edges into thread segments
+def edge_features(P, E):
+    features = []
+
+    for idx, (i, j) in enumerate(E):
+        p1 = P[i]
+        p2 = P[j]
+
+        vec = p2 - p1
+        length = np.linalg.norm(vec)
+
+        if length == 0:
+            continue
+
+        direction = vec / length
+        midpoint = (p1 + p2) / 2
+
+        features.append({
+            "edge_idx": idx,
+            "i": i,
+            "j": j,
+            "p1": p1,
+            "p2": p2,
+            "midpoint": midpoint,
+            "direction": direction,
+            "length": length
+        })
+
+    return features
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 # =========================================================
 # REGISTRATION LOGIC
 # =========================================================
-
-def register_and_fuse(source_skel, target_skel, fusion_voxel=5.0):
+def estimate_rough_transform(source_skel, target_skel):
     s_center = source_skel.get_center()
     t_center = target_skel.get_center()
+
     s_temp = copy.deepcopy(source_skel).translate(-s_center)
     t_temp = copy.deepcopy(target_skel).translate(-t_center)
 
-    print("Searching for best Z-rotation...")
     best_fitness, best_T = -1, np.eye(4)
+
     for deg in range(0, 360, 10):
         angle = np.radians(deg)
-        R = np.array([[np.cos(angle), -np.sin(angle), 0], [np.sin(angle), np.cos(angle), 0], [0, 0, 1]])
-        T_init = np.eye(4); T_init[:3, :3] = R
+        R = np.array([
+            [np.cos(angle), -np.sin(angle), 0],
+            [np.sin(angle),  np.cos(angle), 0],
+            [0,              0,             1]
+        ])
+
+        T_init = np.eye(4)
+        T_init[:3, :3] = R
+
         reg = o3d.pipelines.registration.registration_icp(
-            s_temp, t_temp, 30.0, T_init, o3d.pipelines.registration.TransformationEstimationPointToPoint())
+            s_temp,
+            t_temp,
+            30.0,
+            T_init,
+            o3d.pipelines.registration.TransformationEstimationPointToPoint()
+        )
+
         if reg.fitness > best_fitness:
-            best_fitness, best_T = reg.fitness, reg.transformation
+            best_fitness = reg.fitness
+            best_T = reg.transformation
 
-    print(f"Refining alignment (Best rotation found at approx {np.degrees(np.arctan2(best_T[1,0], best_T[0,0])):.1f} deg)...")
     reg_final = o3d.pipelines.registration.registration_icp(
-        s_temp, t_temp, 25.0, best_T, 
+        s_temp,
+        t_temp,
+        25.0,
+        best_T,
         o3d.pipelines.registration.TransformationEstimationPointToPoint(),
-        o3d.pipelines.registration.ICPConvergenceCriteria(max_iteration=5000))
+        o3d.pipelines.registration.ICPConvergenceCriteria(max_iteration=5000)
+    )
 
-    T_s_c = np.eye(4); T_s_c[:3, 3] = -s_center
-    T_t_u = np.eye(4); T_t_u[:3, 3] = t_center
+    T_s_c = np.eye(4)
+    T_s_c[:3, 3] = -s_center
+
+    T_t_u = np.eye(4)
+    T_t_u[:3, 3] = t_center
+
     full_T = T_t_u @ reg_final.transformation @ T_s_c
-    
-    source_aligned = copy.deepcopy(source_skel).transform(full_T)
-    
-    # Paint for verification
-    source_aligned.paint_uniform_color([1, 0, 0]) # Red
-    target_skel.paint_uniform_color([0, 1, 0])    # Green
-    
-    print(f"Fusing skeletons (voxel size {fusion_voxel})...")
-    combined = source_aligned + target_skel
-    return combined.voxel_down_sample(voxel_size=fusion_voxel), combined
 
+    return full_T
+
+
+
+# =========================================================
+# TOPO FIX LOGIC
+# =========================================================
+#For each edge in scan 2, compare it against nearby edges in scan 1.
+def edge_match_score(e1, e2):
+    # midpoint distance
+    mid_dist = np.linalg.norm(e1["midpoint"] - e2["midpoint"])
+
+    # direction similarity; abs because edge direction can be reversed
+    dir_sim = abs(np.dot(e1["direction"], e2["direction"]))
+
+    # endpoint distance, allowing reversed orientation
+    same_orientation = (
+        np.linalg.norm(e1["p1"] - e2["p1"]) +
+        np.linalg.norm(e1["p2"] - e2["p2"])
+    )
+
+    flipped_orientation = (
+        np.linalg.norm(e1["p1"] - e2["p2"]) +
+        np.linalg.norm(e1["p2"] - e2["p1"])
+    )
+
+    endpoint_dist = min(same_orientation, flipped_orientation)
+
+    return mid_dist, dir_sim, endpoint_dist
+
+def is_same_edge(
+    e1,
+    e2,
+    max_mid_dist=0.02,
+    min_dir_sim=0.90,
+    max_endpoint_dist=0.04
+):
+    mid_dist, dir_sim, endpoint_dist = edge_match_score(e1, e2)
+
+    return (
+        mid_dist <= max_mid_dist and
+        dir_sim >= min_dir_sim and
+        endpoint_dist <= max_endpoint_dist
+    )
+
+def apply_transform_to_points(P, T):
+    P_h = np.hstack([P, np.ones((len(P), 1))])
+    P_t = (T @ P_h.T).T[:, :3]
+    return P_t
+
+def find_or_add_vertex(P_merged, p, snap_radius=3.0):
+    P_arr = np.asarray(P_merged)
+
+    if len(P_arr) == 0:
+        P_merged.append(p.tolist())
+        return 0
+
+    dists = np.linalg.norm(P_arr - p, axis=1)
+    nearest = int(np.argmin(dists))
+
+    if dists[nearest] <= snap_radius:
+        return nearest
+
+    P_merged.append(p.tolist())
+    return len(P_merged) - 1
+def merge_graphs_topology_aware(
+    P1,
+    E1,
+    P2,
+    E2,
+    max_mid_dist=5.0,
+    min_dir_sim=0.90,
+    max_endpoint_dist=10.0,
+    snap_radius=3.0
+):
+    F1 = edge_features(P1, E1)
+    F2 = edge_features(P2, E2)
+
+    P_merged = P1.tolist()
+    E_merged = [list(map(int, e)) for e in E1]
+
+    for e2 in F2:
+        duplicate = False
+
+        for e1 in F1:
+            mid_dist, dir_sim, endpoint_dist = edge_match_score(e1, e2)
+
+            if (
+                mid_dist <= max_mid_dist and
+                dir_sim >= min_dir_sim and
+                endpoint_dist <= max_endpoint_dist
+            ):
+                duplicate = True
+                break
+
+        if duplicate:
+            continue
+
+        a = find_or_add_vertex(P_merged, e2["p1"], snap_radius=snap_radius)
+        b = find_or_add_vertex(P_merged, e2["p2"], snap_radius=snap_radius)
+
+        if a != b:
+            E_merged.append([a, b])
+
+    return np.asarray(P_merged), np.asarray(E_merged, dtype=int)
+
+def remove_duplicate_edges(P, E):
+    seen = set()
+    cleaned = []
+
+    for a, b in E:
+        a, b = int(a), int(b)
+
+        if a == b:
+            continue
+
+        key = tuple(sorted((a, b)))
+
+        if key not in seen:
+            seen.add(key)
+            cleaned.append([a, b])
+
+    return P, np.asarray(cleaned, dtype=int)
+import networkx as nx
+
+def remove_small_components(P, E, min_component_size=3):
+    G = nx.Graph()
+
+    for i, p in enumerate(P):
+        G.add_node(i, pos=p)
+
+    for a, b in E:
+        G.add_edge(int(a), int(b))
+
+    keep_nodes = set()
+
+    for comp in nx.connected_components(G):
+        if len(comp) >= min_component_size:
+            keep_nodes.update(comp)
+
+    old_to_new = {}
+    new_P = []
+
+    for old_idx in sorted(keep_nodes):
+        old_to_new[old_idx] = len(new_P)
+        new_P.append(P[old_idx])
+
+    new_E = []
+
+    for a, b in E:
+        a, b = int(a), int(b)
+
+        if a in old_to_new and b in old_to_new:
+            new_E.append([old_to_new[a], old_to_new[b]])
+
+    return np.asarray(new_P), np.asarray(new_E, dtype=int)
+
+
+# =========================================================
+# EXPORT LOGIC
+# =========================================================
+def export_pajek_with_positions(P, E, output_path):
+    with open(output_path, "w") as f:
+        f.write(f"*Vertices {len(P)}\n")
+
+        for i, p in enumerate(P, start=1):
+            x, y, z = p
+            f.write(f'{i} "{i}" {x:.6f} {y:.6f} {z:.6f}\n')
+
+        f.write("*Edges\n")
+
+        for a, b in E:
+            f.write(f"{int(a) + 1} {int(b) + 1}\n")
 
 
 def main():
+    parser = argparse.ArgumentParser(
+        description="Topology-aware merge of two spiderweb PCD scans."
+    )
 
-    parser = argparse.ArgumentParser(description="Merge two spider web scans into a single skeleton.")
     parser.add_argument("pcd1", help="Path to first raw PCD scan")
     parser.add_argument("pcd2", help="Path to second raw PCD scan")
-    parser.add_argument("--output", default="merged_skeleton.pcd", help="Path to output fused skeleton")
-    parser.add_argument("--fusion-radius", type=float, default=5.0, help="Voxel size for thread fusion")
-    args = parser.parse_args()
-    
-    try: 
-        pcd1= args.pcd1
-        pcd2 = args.pcd2
 
-        result1 = generate_graph(pcd1)
+    parser.add_argument(
+        "--output",
+        default="merged_graph.net",
+        help="Path to output Pajek .net file"
+    )
+
+    parser.add_argument(
+        "--pcd-output",
+        default="merged_graph.pcd",
+        help="Path to output merged graph vertices as PCD"
+    )
+
+    parser.add_argument(
+        "--max-mid-dist",
+        type=float,
+        default=5.0,
+        help="Maximum midpoint distance for duplicate edge matching"
+    )
+
+    parser.add_argument(
+        "--min-dir-sim",
+        type=float,
+        default=0.90,
+        help="Minimum direction similarity for duplicate edge matching"
+    )
+
+    parser.add_argument(
+        "--max-endpoint-dist",
+        type=float,
+        default=10.0,
+        help="Maximum endpoint distance for duplicate edge matching"
+    )
+
+    parser.add_argument(
+        "--snap-radius",
+        type=float,
+        default=3.0,
+        help="Radius for snapping compatible vertices"
+    )
+
+    parser.add_argument(
+        "--min-component-size",
+        type=int,
+        default=3,
+        help="Minimum connected component size to keep"
+    )
+
+    args = parser.parse_args()
+
+    try:
+        print("\n=== 1. Reconstructing graph for scan 1 ===")
+        result1 = generate_graph(args.pcd1)
 
         points1 = np.loadtxt(result1["nodes"])
-        edges1  = np.loadtxt(result1["edges"])
-
-        result2 = generate_graph(pcd2)
-
-        points2 = np.loadtxt(result2["nodes"])
-        edges2  = np.loadtxt(result2["edges"])
-
+        edges1 = np.loadtxt(result1["edges"], dtype=int)
 
         P_graph_1, E_graph_1 = rebuild_graph_from_arrays(points1, edges1)
+
+        print(f"Scan 1 graph: {len(P_graph_1)} vertices, {len(E_graph_1)} edges")
+
+        print("\n=== 2. Reconstructing graph for scan 2 ===")
+        result2 = generate_graph(args.pcd2)
+
+        points2 = np.loadtxt(result2["nodes"])
+        edges2 = np.loadtxt(result2["edges"], dtype=int)
+
         P_graph_2, E_graph_2 = rebuild_graph_from_arrays(points2, edges2)
 
+        print(f"Scan 2 graph: {len(P_graph_2)} vertices, {len(E_graph_2)} edges")
 
+        print("\n=== 3. Building Open3D graph point clouds for rough registration ===")
+        pcd_graph_1 = o3d.geometry.PointCloud()
+        pcd_graph_1.points = o3d.utility.Vector3dVector(P_graph_1)
 
+        pcd_graph_2 = o3d.geometry.PointCloud()
+        pcd_graph_2.points = o3d.utility.Vector3dVector(P_graph_2)
 
+        print("\n=== 4. Estimating rough Z-rotation + ICP transform ===")
+        rough_T = estimate_rough_transform(
+            source_skel=pcd_graph_2,
+            target_skel=pcd_graph_1
+        )
+
+        print("Estimated transform:")
+        print(rough_T)
+
+        print("\n=== 5. Applying transform to scan 2 graph ===")
+        P_graph_2_aligned = apply_transform_to_points(P_graph_2, rough_T)
+
+        print("\n=== 6. Topology-aware edge merge ===")
+        P_merged, E_merged = merge_graphs_topology_aware(
+            P1=P_graph_1,
+            E1=E_graph_1,
+            P2=P_graph_2_aligned,
+            E2=E_graph_2,
+            max_mid_dist=args.max_mid_dist,
+            min_dir_sim=args.min_dir_sim,
+            max_endpoint_dist=args.max_endpoint_dist,
+            snap_radius=args.snap_radius
+        )
+
+        print(f"After topo merge: {len(P_merged)} vertices, {len(E_merged)} edges")
+
+        print("\n=== 7. Removing duplicate edges ===")
+        P_merged, E_merged = remove_duplicate_edges(P_merged, E_merged)
+
+        print(f"After duplicate cleanup: {len(P_merged)} vertices, {len(E_merged)} edges")
+
+        print("\n=== 8. Removing tiny disconnected components ===")
+        P_merged, E_merged = remove_small_components(
+            P_merged,
+            E_merged,
+            min_component_size=args.min_component_size
+        )
+
+        print(f"After component cleanup: {len(P_merged)} vertices, {len(E_merged)} edges")
+
+        print("\n=== 9. Exporting merged PCD vertices ===")
+        merged_pcd = o3d.geometry.PointCloud()
+        merged_pcd.points = o3d.utility.Vector3dVector(P_merged)
+        o3d.io.write_point_cloud(args.pcd_output, merged_pcd)
+
+        print(f"Wrote merged PCD to: {args.pcd_output}")
+
+        print("\n=== 10. Exporting merged Pajek .net graph ===")
+        export_pajek_with_positions(P_merged, E_merged, args.output)
+
+        print(f"Wrote merged graph to: {args.output}")
+
+        print("\nDone.")
 
     except Exception as e:
         print(f"\nERROR: {str(e)}")
         sys.exit(1)
 
+
+
+if __name__ == "__main__":
+    main()
