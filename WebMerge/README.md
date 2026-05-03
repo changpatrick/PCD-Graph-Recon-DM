@@ -13,7 +13,7 @@ This tool provides a single entry point for merging two raw PCD scans of the sam
 Run the script from the root of the repository:
 
 ```bash
-python3 WebMerge/merge_web_scans.py <path_to_scan1.pcd> <path_to_scan2.pcd> --output <output_path.pcd>
+python3 WebMerge/merge_web_scans.py <path_to_scan1.pcd> <path_to_scan2.pcd> --output <output_path.pcd> --crop-percent <0.0 to 1.0, default 0.0>
 ```
 
 The script will generate two files:
