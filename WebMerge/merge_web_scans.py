@@ -144,7 +144,37 @@ def register_and_fuse(source_skel, target_skel, fusion_voxel=5.0):
     
     print(f"Fusing skeletons (voxel size {fusion_voxel})...")
     combined = source_aligned + target_skel
-    return combined.voxel_down_sample(voxel_size=fusion_voxel), combined
+    fused = combined.voxel_down_sample(voxel_size=fusion_voxel)
+    
+    # Strip colors from the fused (non-debug) point cloud so it isn't colored
+    fused.colors = o3d.utility.Vector3dVector()
+    
+    return fused, combined
+
+# =========================================================
+# CROP LOGIC
+# =========================================================
+
+def crop_point_cloud(pcd, crop_percent=0.40):
+    if crop_percent <= 0:
+        return pcd
+    bbox = pcd.get_axis_aligned_bounding_box()
+    min_b = bbox.get_min_bound()
+    max_b = bbox.get_max_bound()
+    ranges = max_b - min_b
+    
+    new_min = min_b.copy()
+    new_max = max_b.copy()
+    
+    # Crop X (left/right) and Z (up/down)
+    new_min[0] += ranges[0] * crop_percent
+    new_max[0] -= ranges[0] * crop_percent
+    
+    new_min[2] += ranges[2] * crop_percent
+    new_max[2] -= ranges[2] * crop_percent
+    
+    cropped_bbox = o3d.geometry.AxisAlignedBoundingBox(new_min, new_max)
+    return pcd.crop(cropped_bbox)
 
 # =========================================================
 # MAIN
@@ -156,6 +186,7 @@ def main():
     parser.add_argument("pcd2", help="Path to second raw PCD scan")
     parser.add_argument("--output", default="merged_skeleton.pcd", help="Path to output fused skeleton")
     parser.add_argument("--fusion-radius", type=float, default=5.0, help="Voxel size for thread fusion")
+    parser.add_argument("--crop-percent", type=float, default=0.20, help="Percentage of bounding box to crop from each side")
     args = parser.parse_args()
 
     try:
@@ -163,6 +194,11 @@ def main():
         skel2 = skeletonize(args.pcd2)
         fused, combined = register_and_fuse(skel1, skel2, fusion_voxel=args.fusion_radius)
         
+        if args.crop_percent > 0:
+            print(f"Cropping outer {args.crop_percent*100}% of the bounding box...")
+            fused = crop_point_cloud(fused, args.crop_percent)
+            combined = crop_point_cloud(combined, args.crop_percent)
+            
         # Save final fused result
         o3d.io.write_point_cloud(args.output, fused)
         
