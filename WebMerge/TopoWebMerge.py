@@ -466,8 +466,8 @@ def main():
 
         result1 = generate_graph(pcd1)
 
-        points1 = np.loadtxt(result1["nodes"])
-        edges1 = np.loadtxt(result1["edges"], dtype=int)
+        points1 = result1["nodes"]
+        edges1 = result1["edges"].astype(int)
 
         P_graph_1, E_graph_1 = rebuild_graph_from_arrays(points1, edges1)
 
@@ -477,8 +477,8 @@ def main():
         pcd2 = o3d.io.read_point_cloud(args.pcd2)
         result2 = generate_graph(pcd2)
 
-        points2 = np.loadtxt(result2["nodes"])
-        edges2 = np.loadtxt(result2["edges"], dtype=int)
+        points2 = result2["nodes"]
+        edges2 = result2["edges"].astype(int)
 
         P_graph_2, E_graph_2 = rebuild_graph_from_arrays(points2, edges2)
 
@@ -538,7 +538,21 @@ def main():
 
         print(f"Wrote merged PCD to: {args.pcd_output}")
 
-        print("\n=== 10. Exporting merged Pajek .net graph ===")
+        print("\n=== 10. Exporting debug colored PCD ===")
+        debug_pcd1 = o3d.geometry.PointCloud()
+        debug_pcd1.points = o3d.utility.Vector3dVector(P_graph_1)
+        debug_pcd1.paint_uniform_color([0, 1, 0]) # Green for scan 1
+
+        debug_pcd2 = o3d.geometry.PointCloud()
+        debug_pcd2.points = o3d.utility.Vector3dVector(P_graph_2_aligned)
+        debug_pcd2.paint_uniform_color([1, 0, 0]) # Red for scan 2
+
+        combined_debug = debug_pcd1 + debug_pcd2
+        debug_output_path = args.pcd_output.replace(".pcd", "_debug.pcd")
+        o3d.io.write_point_cloud(debug_output_path, combined_debug)
+        print(f"Wrote color-coded debug view to: {debug_output_path}")
+
+        print("\n=== 11. Exporting merged Pajek .net graph ===")
         export_pajek_with_positions(P_merged, E_merged, args.output)
 
         print(f"Wrote merged graph to: {args.output}")
