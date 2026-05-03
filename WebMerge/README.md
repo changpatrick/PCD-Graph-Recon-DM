@@ -20,6 +20,21 @@ The script will generate two files:
 *   `<output_path>.pcd`: The final fused skeleton (Ready for Reconstruction).
 *   `<output_path>_debug.pcd`: A color-coded version showing the red/green overlap.
 
+
+## TopoWebMerge Usage
+This script takes in two raw pcds and outputs the final graph after processing including degree-2 vertex collapse. 
+Run the script from the root of the repository:
+
+```bash
+python3 WebMerge/TopoWebMerge.py <path_to_scan1.pcd> <path_to_scan2.pcd> --output <pajek_path.net> --pcd_output <pcd_path.pcd> <options>
+```
+
+The script will generate three files:
+*   `<pcd_path>.pcd`: Vertices of the final graph.
+*   `<pcd_path>_debug.pcd`: A color-coded version showing the red/green overlap.
+*   `<pajek_path>.net`: The actual final graph Pajek file; visualize with WebMerge/pajek_graph_vis.py (edit .net file path within)
+
+
 ### Options
 * `--fusion-radius`: (Default: 5.0) The voxel size used to merge close threads. If you still see "double threads", increase this value slightly (e.g., to 7.0).
 
