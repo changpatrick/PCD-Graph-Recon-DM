@@ -37,6 +37,7 @@ The script will generate three files:
 
 ### Options
 * `--fusion-radius`: (Default: 5.0) The voxel size used to merge close threads. If you still see "double threads", increase this value slightly (e.g., to 7.0).
+* `--crop-percent`: (Default: 0.0 [original behavior]) How much of outside of scans are cropped prior to merging, where default is original behavior (nothing is cropped). 
 
 ## Example
 ```bash

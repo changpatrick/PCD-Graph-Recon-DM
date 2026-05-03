@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 import open3d as o3d
 import numpy as np
 import copy
@@ -6,14 +7,12 @@ import os
 import sys
 from sklearn.cluster import DBSCAN
 from sklearn.neighbors import NearestNeighbors
+import networkx as nx
+
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
 from pcd_graph_recon.api import generate_graph
 from RayRecon.RayRecon_simplified_w_Pajeck import rebuild_graph_from_arrays
-import open3d as o3d
-
-
-
 
 
 # =========================================================
@@ -113,23 +112,22 @@ def skeletonize(pcd_path):
     final_pcd.points = o3d.utility.Vector3dVector(np.vstack((base_points, accum_new)) if len(accum_new) > 0 else base_points)
     return final_pcd
 
-#convert edges into thread segments
+
+# =========================================================
+# GRAPH FEATURES & CROP LOGIC
+# =========================================================
+
 def edge_features(P, E):
     features = []
-
     for idx, (i, j) in enumerate(E):
         p1 = P[i]
         p2 = P[j]
-
         vec = p2 - p1
         length = np.linalg.norm(vec)
-
         if length == 0:
             continue
-
         direction = vec / length
         midpoint = (p1 + p2) / 2
-
         features.append({
             "edge_idx": idx,
             "i": i,
@@ -140,25 +138,33 @@ def edge_features(P, E):
             "direction": direction,
             "length": length
         })
-
     return features
 
+def get_crop_bounding_box(points, crop_percent):
+    """Generates a bounding box shrunk by crop_percent on each side."""
+    pcd = o3d.geometry.PointCloud()
+    pcd.points = o3d.utility.Vector3dVector(points)
+    bbox = pcd.get_axis_aligned_bounding_box()
+    min_b = bbox.get_min_bound()
+    max_b = bbox.get_max_bound()
+    ranges = max_b - min_b
 
+    new_min = min_b.copy()
+    new_max = max_b.copy()
 
+    # Crop X (left/right) and Z (up/down)
+    new_min[0] += ranges[0] * crop_percent
+    new_max[0] -= ranges[0] * crop_percent
+    new_min[2] += ranges[2] * crop_percent
+    new_max[2] -= ranges[2] * crop_percent
 
-
-
-
-
-
-
-
-
+    return o3d.geometry.AxisAlignedBoundingBox(new_min, new_max)
 
 
 # =========================================================
 # REGISTRATION LOGIC
 # =========================================================
+
 def estimate_rough_transform(source_skel, target_skel):
     s_center = source_skel.get_center()
     t_center = target_skel.get_center()
@@ -211,67 +217,23 @@ def estimate_rough_transform(source_skel, target_skel):
     return full_T
 
 
-
 # =========================================================
 # TOPO FIX LOGIC
 # =========================================================
 
-'''
-Basically, im trying to use topology to get the last small adjustments to merge the two webs. Instead of comparing points, i want to compare threads based on where it is, which way it goes, and what it connects.
-
-I run 3 checks to see if 2 local threads are the same:
-1. reasonable distance: Take the midpoint of each edge, and measure/compare distance
-2. Direction/orientation: Compare direction vectors + use dot product
-3. Endpoints and structure: CHeck if endpoints the same
-
-
-'''
-
-
-
-
-
-
-
-
-
-#For each edge in scan 2, compare it against nearby edges in scan 1.
 def edge_match_score(e1, e2):
-    # midpoint distance
     mid_dist = np.linalg.norm(e1["midpoint"] - e2["midpoint"])
-
-    # direction similarity; abs because edge direction can be reversed
     dir_sim = abs(np.dot(e1["direction"], e2["direction"]))
-
-    # endpoint distance, allowing reversed orientation
     same_orientation = (
         np.linalg.norm(e1["p1"] - e2["p1"]) +
         np.linalg.norm(e1["p2"] - e2["p2"])
     )
-
     flipped_orientation = (
         np.linalg.norm(e1["p1"] - e2["p2"]) +
         np.linalg.norm(e1["p2"] - e2["p1"])
     )
-
     endpoint_dist = min(same_orientation, flipped_orientation)
-
     return mid_dist, dir_sim, endpoint_dist
-
-def is_same_edge(
-    e1,
-    e2,
-    max_mid_dist=0.02,
-    min_dir_sim=0.90,
-    max_endpoint_dist=0.04
-):
-    mid_dist, dir_sim, endpoint_dist = edge_match_score(e1, e2)
-
-    return (
-        mid_dist <= max_mid_dist and
-        dir_sim >= min_dir_sim and
-        endpoint_dist <= max_endpoint_dist
-    )
 
 def apply_transform_to_points(P, T):
     P_h = np.hstack([P, np.ones((len(P), 1))])
@@ -280,41 +242,38 @@ def apply_transform_to_points(P, T):
 
 def find_or_add_vertex(P_merged, p, snap_radius=3.0):
     P_arr = np.asarray(P_merged)
-
     if len(P_arr) == 0:
         P_merged.append(p.tolist())
         return 0
-
     dists = np.linalg.norm(P_arr - p, axis=1)
     nearest = int(np.argmin(dists))
-
     if dists[nearest] <= snap_radius:
         return nearest
-
     P_merged.append(p.tolist())
     return len(P_merged) - 1
-def merge_graphs_topology_aware(
-    P1,
-    E1,
-    P2,
-    E2,
-    max_mid_dist=5.0,
-    min_dir_sim=0.90,
-    max_endpoint_dist=10.0,
-    snap_radius=3.0
-):
-    F1 = edge_features(P1, E1)
-    F2 = edge_features(P2, E2)
 
+def merge_graphs_topology_aware(
+    P1, E1, E1_core, 
+    P2_aligned, E2_core, E2_out, 
+    max_mid_dist=5.0, min_dir_sim=0.90, max_endpoint_dist=10.0, snap_radius=3.0
+):
+    """
+    Blends the cores by filtering out duplicate threads, but inherently adds 
+    back the outside segments of both graphs safely.
+    """
+    F1_core = edge_features(P1, E1_core)
+    F2_core = edge_features(P2_aligned, E2_core)
+    F2_out = edge_features(P2_aligned, E2_out)
+
+    # Start with ALL of P1 and ALL of E1 (both core and outside)
     P_merged = P1.tolist()
     E_merged = [list(map(int, e)) for e in E1]
 
-    for e2 in F2:
+    # 1. Process Core of Scan 2 (Dedup against Core of Scan 1)
+    for e2 in F2_core:
         duplicate = False
-
-        for e1 in F1:
+        for e1 in F1_core:
             mid_dist, dir_sim, endpoint_dist = edge_match_score(e1, e2)
-
             if (
                 mid_dist <= max_mid_dist and
                 dir_sim >= min_dir_sim and
@@ -323,12 +282,16 @@ def merge_graphs_topology_aware(
                 duplicate = True
                 break
 
-        if duplicate:
-            continue
+        if not duplicate:
+            a = find_or_add_vertex(P_merged, e2["p1"], snap_radius=snap_radius)
+            b = find_or_add_vertex(P_merged, e2["p2"], snap_radius=snap_radius)
+            if a != b:
+                E_merged.append([a, b])
 
+    # 2. Add back outside edges of Scan 2 (No deduplication against core needed)
+    for e2 in F2_out:
         a = find_or_add_vertex(P_merged, e2["p1"], snap_radius=snap_radius)
         b = find_or_add_vertex(P_merged, e2["p2"], snap_radius=snap_radius)
-
         if a != b:
             E_merged.append([a, b])
 
@@ -337,68 +300,49 @@ def merge_graphs_topology_aware(
 def remove_duplicate_edges(P, E):
     seen = set()
     cleaned = []
-
     for a, b in E:
         a, b = int(a), int(b)
-
-        if a == b:
-            continue
-
+        if a == b: continue
         key = tuple(sorted((a, b)))
-
         if key not in seen:
             seen.add(key)
             cleaned.append([a, b])
-
     return P, np.asarray(cleaned, dtype=int)
-import networkx as nx
 
 def remove_small_components(P, E, min_component_size=3):
     G = nx.Graph()
-
     for i, p in enumerate(P):
         G.add_node(i, pos=p)
-
     for a, b in E:
         G.add_edge(int(a), int(b))
-
     keep_nodes = set()
-
     for comp in nx.connected_components(G):
         if len(comp) >= min_component_size:
             keep_nodes.update(comp)
-
     old_to_new = {}
     new_P = []
-
     for old_idx in sorted(keep_nodes):
         old_to_new[old_idx] = len(new_P)
         new_P.append(P[old_idx])
-
     new_E = []
-
     for a, b in E:
         a, b = int(a), int(b)
-
         if a in old_to_new and b in old_to_new:
             new_E.append([old_to_new[a], old_to_new[b]])
-
     return np.asarray(new_P), np.asarray(new_E, dtype=int)
 
 
 # =========================================================
 # EXPORT LOGIC
 # =========================================================
+
 def export_pajek_with_positions(P, E, output_path):
     with open(output_path, "w") as f:
         f.write(f"*Vertices {len(P)}\n")
-
         for i, p in enumerate(P, start=1):
             x, y, z = p
             f.write(f'{i} "{i}" {x:.6f} {y:.6f} {z:.6f}\n')
-
         f.write("*Edges\n")
-
         for a, b in E:
             f.write(f"{int(a) + 1} {int(b) + 1}\n")
 
@@ -407,135 +351,103 @@ def main():
     parser = argparse.ArgumentParser(
         description="Topology-aware merge of two spiderweb PCD scans."
     )
-
     parser.add_argument("pcd1", help="Path to first raw PCD scan")
     parser.add_argument("pcd2", help="Path to second raw PCD scan")
-
-    parser.add_argument(
-        "--output",
-        default="merged_graph.net",
-        help="Path to output Pajek .net file"
-    )
-
-    parser.add_argument(
-        "--pcd-output",
-        default="merged_graph.pcd",
-        help="Path to output merged graph vertices as PCD"
-    )
-
-    parser.add_argument(
-        "--max-mid-dist",
-        type=float,
-        default=5.0,
-        help="Maximum midpoint distance for duplicate edge matching"
-    )
-
-    parser.add_argument(
-        "--min-dir-sim",
-        type=float,
-        default=0.90,
-        help="Minimum direction similarity for duplicate edge matching"
-    )
-
-    parser.add_argument(
-        "--max-endpoint-dist",
-        type=float,
-        default=10.0,
-        help="Maximum endpoint distance for duplicate edge matching"
-    )
-
-    parser.add_argument(
-        "--snap-radius",
-        type=float,
-        default=3.0,
-        help="Radius for snapping compatible vertices"
-    )
-
-    parser.add_argument(
-        "--min-component-size",
-        type=int,
-        default=3,
-        help="Minimum connected component size to keep"
-    )
+    parser.add_argument("--output", default="merged_graph.net", help="Path to output Pajek .net file")
+    parser.add_argument("--pcd-output", default="merged_graph.pcd", help="Path to output merged graph vertices as PCD")
+    parser.add_argument("--max-mid-dist", type=float, default=5.0, help="Maximum midpoint distance for duplicate edge matching")
+    parser.add_argument("--min-dir-sim", type=float, default=0.90, help="Minimum direction similarity for duplicate edge matching")
+    parser.add_argument("--max-endpoint-dist", type=float, default=10.0, help="Maximum endpoint distance for duplicate edge matching")
+    parser.add_argument("--snap-radius", type=float, default=3.0, help="Radius for snapping compatible vertices")
+    parser.add_argument("--min-component-size", type=int, default=3, help="Minimum connected component size to keep")
+    parser.add_argument("--crop-percent", type=float, default=0.0, help="Percentage to crop from edges prior to alignment/blending")
 
     args = parser.parse_args()
 
     try:
         print("\n=== 1. Reconstructing graph for scan 1 ===")
         pcd1 = o3d.io.read_point_cloud(args.pcd1)
-
         result1 = generate_graph(pcd1)
-
         points1 = result1["nodes"]
         edges1 = result1["edges"].astype(int)
-
         P_graph_1, E_graph_1 = rebuild_graph_from_arrays(points1, edges1)
-
         print(f"Scan 1 graph: {len(P_graph_1)} vertices, {len(E_graph_1)} edges")
 
         print("\n=== 2. Reconstructing graph for scan 2 ===")
         pcd2 = o3d.io.read_point_cloud(args.pcd2)
         result2 = generate_graph(pcd2)
-
         points2 = result2["nodes"]
         edges2 = result2["edges"].astype(int)
-
         P_graph_2, E_graph_2 = rebuild_graph_from_arrays(points2, edges2)
-
         print(f"Scan 2 graph: {len(P_graph_2)} vertices, {len(E_graph_2)} edges")
 
-        print("\n=== 3. Building Open3D graph point clouds for rough registration ===")
-        pcd_graph_1 = o3d.geometry.PointCloud()
-        pcd_graph_1.points = o3d.utility.Vector3dVector(P_graph_1)
+        print("\n=== 3. Extracting Cores for Alignment and Blending ===")
+        if args.crop_percent > 0:
+            print(f"Calculating bounding boxes and splitting {args.crop_percent*100}% edges for both scans...")
+            
+            bbox1 = get_crop_bounding_box(P_graph_1, args.crop_percent)
+            bbox2 = get_crop_bounding_box(P_graph_2, args.crop_percent)
 
-        pcd_graph_2 = o3d.geometry.PointCloud()
-        pcd_graph_2.points = o3d.utility.Vector3dVector(P_graph_2)
+            pcd_full_1 = o3d.geometry.PointCloud(o3d.utility.Vector3dVector(P_graph_1))
+            in1 = set(bbox1.get_point_indices_within_bounding_box(pcd_full_1.points))
+            
+            pcd_full_2 = o3d.geometry.PointCloud(o3d.utility.Vector3dVector(P_graph_2))
+            in2 = set(bbox2.get_point_indices_within_bounding_box(pcd_full_2.points))
 
-        print("\n=== 4. Estimating rough Z-rotation + ICP transform ===")
-        rough_T = estimate_rough_transform(
-            source_skel=pcd_graph_2,
-            target_skel=pcd_graph_1
-        )
+            # Split edges into Core and Outside. Core = both endpoints inside the bbox.
+            E_graph_1_core = [e for e in E_graph_1 if int(e[0]) in in1 and int(e[1]) in in1]
+            E_graph_2_core = [e for e in E_graph_2 if int(e[0]) in in2 and int(e[1]) in in2]
+            E_graph_2_out  = [e for e in E_graph_2 if int(e[0]) not in in2 or int(e[1]) not in in2]
 
+            # Build PointClouds representing ONLY the core for accurate ICP alignment
+            P1_core_pts = np.array([P_graph_1[i] for i in in1]) if in1 else P_graph_1
+            P2_core_pts = np.array([P_graph_2[i] for i in in2]) if in2 else P_graph_2
+
+            pcd_graph_1_core = o3d.geometry.PointCloud(o3d.utility.Vector3dVector(P1_core_pts))
+            pcd_graph_2_core = o3d.geometry.PointCloud(o3d.utility.Vector3dVector(P2_core_pts))
+            
+            print(f"Scan 1 Core: {len(P1_core_pts)} vertices, {len(E_graph_1_core)} edges")
+            print(f"Scan 2 Core: {len(P2_core_pts)} vertices, {len(E_graph_2_core)} edges")
+        else:
+            print("Skipping crop (crop-percent is 0). Processing full graphs.")
+            pcd_graph_1_core = o3d.geometry.PointCloud(o3d.utility.Vector3dVector(P_graph_1))
+            pcd_graph_2_core = o3d.geometry.PointCloud(o3d.utility.Vector3dVector(P_graph_2))
+            E_graph_1_core = E_graph_1
+            E_graph_2_core = E_graph_2
+            E_graph_2_out = []
+
+        print("\n=== 4. Estimating rough Z-rotation + ICP transform on Cores ===")
+        rough_T = estimate_rough_transform(source_skel=pcd_graph_2_core, target_skel=pcd_graph_1_core)
         print("Estimated transform:")
         print(rough_T)
 
-        print("\n=== 5. Applying transform to scan 2 graph ===")
+        print("\n=== 5. Applying transform to FULL Scan 2 (Core + Outside) ===")
+        # This identical transformation moves the outside points right alongside the core
         P_graph_2_aligned = apply_transform_to_points(P_graph_2, rough_T)
 
-        print("\n=== 6. Topology-aware edge merge ===")
+        print("\n=== 6. Topology-aware edge merge (Blending Cores, Adding back Outsides) ===")
         P_merged, E_merged = merge_graphs_topology_aware(
-            P1=P_graph_1,
-            E1=E_graph_1,
-            P2=P_graph_2_aligned,
-            E2=E_graph_2,
+            P1=P_graph_1, E1=E_graph_1, E1_core=E_graph_1_core,
+            P2_aligned=P_graph_2_aligned, E2_core=E_graph_2_core, E2_out=E_graph_2_out,
             max_mid_dist=args.max_mid_dist,
             min_dir_sim=args.min_dir_sim,
             max_endpoint_dist=args.max_endpoint_dist,
             snap_radius=args.snap_radius
         )
-
         print(f"After topo merge: {len(P_merged)} vertices, {len(E_merged)} edges")
 
         print("\n=== 7. Removing duplicate edges ===")
         P_merged, E_merged = remove_duplicate_edges(P_merged, E_merged)
-
         print(f"After duplicate cleanup: {len(P_merged)} vertices, {len(E_merged)} edges")
 
         print("\n=== 8. Removing tiny disconnected components ===")
-        P_merged, E_merged = remove_small_components(
-            P_merged,
-            E_merged,
-            min_component_size=args.min_component_size
-        )
-
+        P_merged, E_merged = remove_small_components(P_merged, E_merged, min_component_size=args.min_component_size)
         print(f"After component cleanup: {len(P_merged)} vertices, {len(E_merged)} edges")
 
         print("\n=== 9. Exporting merged PCD vertices ===")
         merged_pcd = o3d.geometry.PointCloud()
         merged_pcd.points = o3d.utility.Vector3dVector(P_merged)
         o3d.io.write_point_cloud(args.pcd_output, merged_pcd)
-
         print(f"Wrote merged PCD to: {args.pcd_output}")
 
         print("\n=== 10. Exporting debug colored PCD ===")
@@ -554,7 +466,6 @@ def main():
 
         print("\n=== 11. Exporting merged Pajek .net graph ===")
         export_pajek_with_positions(P_merged, E_merged, args.output)
-
         print(f"Wrote merged graph to: {args.output}")
 
         print("\nDone.")
@@ -562,7 +473,6 @@ def main():
     except Exception as e:
         print(f"\nERROR: {str(e)}")
         sys.exit(1)
-
 
 
 if __name__ == "__main__":
