@@ -4,6 +4,11 @@
 sparse-weighted-rips.py: runs discrete morse graph reconstruction with sparse weighted rips on features.txt, a commented out code chunk includes how to create features.txt from pcd
 DetourFilter.py: runs detour filtering on the result from sparse-weighted-rips.py
 vis.py: visualizes points, unfiltered lines, and detour filtered lines from 
+full_pipeline.py: alternate pipeline which combines skeletonization, graph recon, rayrecon, detour filter, and extra cleaning. 
+```bash
+python3 full_pipeline.py <dataset_folder> <pcd_file_name> [options (recommend voxel size of 5)]
+```
+skeletonize.py: skeletonizes original pcd
 
 ### Current Pipeline
 0. Generate pcd (possibly using mixed resolution downsampling)
@@ -17,7 +22,11 @@ Step 3 should output a visualization of the web. MomentumConnect.py handles remo
 ### Unified Pipeline (Recommended)
 0. Generate pcd (possibly using mixed resolution downsampling)
 1. Upload pcd into data/name_of_web/ (e.g. data/tangle01)
-2. Run the unified pipeline script:
+2. Run skeletonization, this will output {pcd_file_name}-skeleton.pcd (If using skeletonization, use lower voxel size for future steps):
+   ```bash
+   python3 skeletonize.py <dataset_folder> <pcd_file_name>
+   ```
+4. Run the unified pipeline script:
    ```bash
    python3 run_pipeline.py <dataset_folder> <pcd_file_name> [options]
    ```
@@ -45,6 +54,30 @@ Step 3 should output a visualization of the web. MomentumConnect.py handles remo
    - `--persistence-threshold`: Persistence threshold (default 0.99).
 
    The script outputs the filtered graph to `results/<dataset>-pcd/edge_detour_filtered.txt`.
+ 
+ 
+ ### Refinement Pipeline (RayRecon)
+ 
+ After generating the initial filtered graph, you can use the `RayRecon` script to perform various topological refinements, such as closing gaps, latching endpoints, and simplifying the graph structure.
+ 
+ **How to Run:**
+ ```bash
+ python3 RayRecon/RayRecon_simplified.py
+ ```
+ *(Note: Update the `points_path` and `edges_path` in the `__main__` block of the script to point to your data.)*
+ 
+ #### Key Refinement Functions:
+ 
+ | Function | Description |
+ | :--- | :--- |
+ | `grow_rays_and_connect` | Shoots rays from dangling endpoints to snap nearby branches together. |
+ | `beam_latch_from_degree1` | Shoots a "fat beam" (cylinder) from endpoints to connect to the nearest surface point. |
+ | `simplify_chains` | Collapses chains of degree-2 vertices into single direct edges (Skeletonization). |
+ | `collapse_small_triangles` | Merges 3-cliques into a single vertex at their centroid to remove jittery noise. |
+ | `prune_degree1_once` | Removes "hair" (single-edge branches) from the graph. |
+ 
+ 
+ 
 
 
 
